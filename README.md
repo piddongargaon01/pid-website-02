@@ -34,3 +34,5 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+# pid-website
+Official website for Patel Institute Dongargaon (PID). Established in 2012-13, PID is a premier coaching institute providing academic guidance for Class 2nd to 12th (CG, CBSE, ICSE boards) and competitive exam preparation including IIT-JEE, NEET, Navodaya, and Prayas. This repository contains the source code for the institute's digital presence
