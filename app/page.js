@@ -74,7 +74,7 @@ export default function Home() {
 
   return(<>
 {/* NAV */}
-<nav id="nav" className={sd?"sd":""}>s
+<nav id="nav" className={sd?"sd":""}>
 <div className="ni">
 <a href="#hero" className="nlogo"><img src="/pid_logo.png" alt="PID"/><div className="nlt"><strong>PID</strong><span>Patel Institute Dongargaon</span></div></a>
 <ul className="nlinks"><li><a href="#about">About</a></li><li><Link href="/courses">Courses</Link></li><li><Link href="/toppers">Results</Link></li><li><Link href="/student-portal">Student Portal</Link></li><li><Link href="/events">Events</Link></li><li><a href="#contact">Contact</a></li></ul>
