@@ -98,8 +98,40 @@ img{display:block;max-width:100%;}
 .hbadge{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:99px;padding:5px 14px;margin-bottom:16px;font-size:.72rem;font-weight:600;color:#fff;}
 .hbadge .dot{width:7px;height:7px;border-radius:50%;background:#4ADE80;animation:pu 2s infinite;}
 @keyframes pu{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.5;transform:scale(1.3);}}
-.htitle{font-family:'Plus Jakarta Sans',sans-serif;font-size:clamp(2.2rem,5vw,3.5rem);font-weight:800;color:#fff;line-height:1.08;margin-bottom:6px;letter-spacing:-.01em;}
-.htitle .hl{color:#FCD34D;font-size:clamp(2.8rem,6vw,4.2rem);display:block;}
+/* Premium Branding Typography - 3D Shadow & Balanced Size */
+.hero-brand-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px; 
+  margin-bottom: 24px;
+}
+
+.brand-main {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: clamp(3rem, 7vw, 5.2rem); 
+  font-weight: 800;
+  color: #ffffff !important; 
+  line-height: 1;
+  letter-spacing: -0.02em;
+  /* Premium Subtle 3D Shadow Effect */
+  text-shadow: 
+    1px 1px 0px rgba(0, 0, 0, 0.25),
+    2px 2px 0px rgba(0, 0, 0, 0.15),
+    3px 3px 0px rgba(0, 0, 0, 0.1),
+    0px 12px 25px rgba(0, 0, 0, 0.35);
+  display: block;
+}
+
+.brand-sub-line {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: clamp(1.4rem, 3.5vw, 2.1rem); /* Size को थोड़ा और बड़ा किया (1.8rem se 2.1rem) */
+  font-weight: 700;
+  color: #FCD34D !important; 
+  letter-spacing: 0.12em; 
+  text-transform: uppercase;
+  display: block;
+  opacity: 0.95;
+}
 .htagline{font-size:clamp(.88rem,1.6vw,1.05rem);color:rgba(255,255,255,.8);font-style:italic;margin-bottom:12px;}
 .hdesc{font-size:.88rem;color:rgba(255,255,255,.75);line-height:1.7;margin-bottom:24px;max-width:440px;}
 .hbtns{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:30px;}

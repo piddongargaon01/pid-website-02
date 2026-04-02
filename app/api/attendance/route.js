@@ -2,7 +2,7 @@ import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs } from "firebase/firestore";
 import { NextResponse } from "next/server";
 
-// Firebase config — apne firebase.js se same config copy kar
+// Firebase config — same as firebase.js
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -16,42 +16,81 @@ const firebaseConfig = {
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+// ═══════════════════════════════════════════
 // POST — Device sends attendance data
+// ═══════════════════════════════════════════
 export async function POST(request) {
   try {
     const body = await request.json();
     const { rfidCode, type, deviceId, secret } = body;
 
-    if (!rfidCode || !type) {
+    // Normalize RFID — uppercase, strip ALL whitespace
+    const rfidUpper = rfidCode ? rfidCode.toString().toUpperCase().replace(/\s+/g, "").trim() : "";
+    if (!rfidUpper || !type) {
       return NextResponse.json({ error: "rfidCode and type required" }, { status: 400 });
     }
 
+    // Verify API secret
     const apiSecret = process.env.ATTENDANCE_API_SECRET || "pid_rfid_2026";
     if (secret !== apiSecret) {
       return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
     }
 
-    // Find student by RFID code
+    // ═══ Find student by RFID code ═══
     let studentData = null;
     try {
-      const q = query(collection(db, "students"), where("rfidCode", "==", rfidCode));
+      const q = query(collection(db, "students"), where("rfidCode", "==", rfidUpper));
       const snap = await getDocs(q);
+
       if (!snap.empty) {
-        const doc = snap.docs[0];
-        studentData = { studentId: doc.id, ...doc.data() };
+        const docSnap = snap.docs[0];
+        studentData = { studentId: docSnap.id, ...docSnap.data() };
+        console.log(`✅ RFID Match: "${rfidUpper}" → ${studentData.studentName} (ID: ${docSnap.id})`);
+      } else {
+        console.log(`❌ RFID No Match: "${rfidUpper}" — No student found`);
+        // Debug: list all registered RFIDs
+        try {
+          const allSnap = await getDocs(collection(db, "students"));
+          const rfidList = allSnap.docs
+            .map(d => ({ name: d.data().studentName, rfid: d.data().rfidCode }))
+            .filter(s => s.rfid);
+          console.log(`📋 All registered RFIDs:`, JSON.stringify(rfidList));
+        } catch (debugErr) {
+          console.log("Debug list failed:", debugErr.message);
+        }
       }
     } catch (e) {
-      console.log("Student lookup error:", e.message);
+      console.error("🔥 Student lookup FAILED:", e.message);
+      console.error("⚠️  This usually means Firestore Security Rules are blocking the read!");
+      console.error("⚠️  Fix: Update rules to allow read on 'students' collection without auth.");
     }
 
-    // Save attendance record
+    // ═══ Check batch validity ═══
+    let batchValid = true;
+    let batchExpired = false;
+    if (studentData) {
+      const today = new Date().toISOString().split("T")[0];
+      const startDate = studentData.batchStartDate || "";
+      const endDate = studentData.batchEndDate || "";
+      if (startDate && today < startDate) {
+        batchValid = false;
+      }
+      if (endDate && today > endDate) {
+        batchValid = false;
+        batchExpired = true;
+      }
+    }
+
+    // ═══ Save attendance record ═══
     const record = {
-      rfidCode: rfidCode,
+      rfidCode: rfidUpper,
       type: type,
       studentId: studentData?.studentId || null,
       studentName: studentData?.studentName || "Unknown",
       studentClass: studentData?.class || studentData?.presentClass || "",
       studentPhoto: studentData?.photo || "",
+      batchValid: batchValid,
+      batchExpired: batchExpired,
       deviceId: deviceId || "device-1",
       date: new Date().toISOString().split("T")[0],
       timestamp: new Date().toISOString(),
@@ -60,20 +99,27 @@ export async function POST(request) {
 
     await addDoc(collection(db, "attendance"), record);
 
+    console.log(`📝 Attendance saved: ${record.studentName} [${type}] RFID:${rfidUpper}`);
+
     return NextResponse.json({
       success: true,
       student: record.studentName,
       class: record.studentClass,
       type: type,
+      batchValid: batchValid,
+      batchExpired: batchExpired,
+      matched: !!studentData,
     }, { status: 200 });
 
   } catch (error) {
-    console.error("Attendance API Error:", error);
+    console.error("❌ Attendance API Error:", error);
     return NextResponse.json({ error: "Server error: " + error.message }, { status: 500 });
   }
 }
 
+// ═══════════════════════════════════════════
 // GET — Fetch attendance records
+// ═══════════════════════════════════════════
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -87,6 +133,7 @@ export async function GET(request) {
     return NextResponse.json({ success: true, date, count: records.length, records }, { status: 200 });
 
   } catch (error) {
+    console.error("❌ GET Attendance Error:", error);
     return NextResponse.json({ error: "Server error: " + error.message }, { status: 500 });
   }
 }

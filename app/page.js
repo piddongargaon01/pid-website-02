@@ -89,7 +89,10 @@ export default function Home() {
 <div className="hi">
 <div>
 <div className="hbadge"><span className="dot"/>Admissions Open 2025–26</div>
-<h1 className="htitle">PATEL INSTITUTE<br/><span className="hl" style={{fontSize:"clamp(2.8rem,6vw,4.2rem)"}}>DONGARGAON</span></h1>
+<h1 className="hero-brand-wrapper">
+  <span className="brand-main">PATEL</span>
+  <span className="brand-sub-line">Institute Dongargaon</span>
+</h1>
 <p className="htagline">Knowledge is Power</p>
 <p className="hdesc">Premier coaching institute for Class 2-12 students, offering comprehensive preparation for CG Board, CBSE, ICSE, and competitive exams including JEE, NEET, and Navodaya. Powered by cutting-edge AI learning platform.</p>
 <div className="hbtns"><a href="#courses" className="btn ba">View Courses <i className="fas fa-arrow-right"/></a><a href="#enquiry" className="btn bo">Enquire Now</a></div>

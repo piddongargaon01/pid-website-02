@@ -399,6 +399,27 @@ export default function AdminPanel() {
   const [attDate, setAttDate] = useState(new Date().toISOString().split("T")[0]);
   const [attSearch, setAttSearch] = useState("");
   const [attFilter, setAttFilter] = useState("all");
+  const [attSubTab, setAttSubTab] = useState("students"); // students | teachers
+  const [attClassFilter, setAttClassFilter] = useState("all");
+  const [attViewMode, setAttViewMode] = useState("daily"); // daily | weekly | monthly
+  const [manualAttModal, setManualAttModal] = useState(null); // student object for manual marking
+  const [manualAttType, setManualAttType] = useState("present");
+
+  // Holidays & Notifications states
+  const [holidays, setHolidays] = useState([]);
+  const [holidayForm, setHolidayForm] = useState({});
+  const [showHolidayForm, setShowHolidayForm] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notifForm, setNotifForm] = useState({});
+  const [showNotifForm, setShowNotifForm] = useState(false);
+  const [calMonth, setCalMonth] = useState(new Date().getMonth());
+  const [calYear, setCalYear] = useState(new Date().getFullYear());
+
+  // Fees states
+  const [feeClassFilter, setFeeClassFilter] = useState("all");
+  const [feeSearch, setFeeSearch] = useState("");
+  const [feePaymentForm, setFeePaymentForm] = useState({});
+  const [showFeePayment, setShowFeePayment] = useState(null); // student id
 
   // Form states
   const [showForm, setShowForm] = useState(false);
@@ -477,6 +498,16 @@ export default function AdminPanel() {
         return ta - tb;
       });
       setMaterials(arr);
+    }));
+    unsubs.push(onSnapshot(collection(db, "holidays"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      setHolidays(arr);
+    }));
+    unsubs.push(onSnapshot(collection(db, "scheduled_notifications"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      setNotifications(arr);
     }));
     return () => unsubs.forEach(u => u());
   }, [isAdmin]);
@@ -755,15 +786,33 @@ export default function AdminPanel() {
     setSaving(true);
     try {
       const data = { ...form };
+      // ═══ RFID NORMALIZATION — always uppercase + trim + remove extra spaces ═══
+      if (data.rfidCode) {
+        data.rfidCode = data.rfidCode.toString().toUpperCase().replace(/\s+/g, "").trim();
+      }
+      // ═══ Normalize email ═══
+      if (data.studentEmail) {
+        data.studentEmail = data.studentEmail.trim().toLowerCase();
+      }
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
       if (editId) {
         const { id, ...rest } = data;
+        // ═══ Check RFID duplicate (exclude current student) ═══
+        if (rest.rfidCode) {
+          const rfidDup = students.find(s => s.id !== editId && s.rfidCode === rest.rfidCode);
+          if (rfidDup) { showMsg(`RFID "${rest.rfidCode}" already assigned to ${rfidDup.studentName}!`); setSaving(false); return; }
+        }
         await updateDoc(doc(db, "students", editId), { ...rest, updatedAt: serverTimestamp() });
         showMsg("Student updated!");
       } else {
         // Check duplicate email
         const existing = students.find(s => s.studentEmail?.toLowerCase() === data.studentEmail?.toLowerCase());
         if (existing) { showMsg("This email is already registered!"); setSaving(false); return; }
+        // ═══ Check RFID duplicate ═══
+        if (data.rfidCode) {
+          const rfidDup = students.find(s => s.rfidCode === data.rfidCode);
+          if (rfidDup) { showMsg(`RFID "${data.rfidCode}" already assigned to ${rfidDup.studentName}!`); setSaving(false); return; }
+        }
         await addDoc(collection(db, "students"), { ...data, status: "active", createdAt: serverTimestamp() });
         showMsg("Student enrolled successfully!");
       }
@@ -839,6 +888,174 @@ export default function AdminPanel() {
   }
 
   // ═══════════════════════════════════════════
+  // HOLIDAYS CRUD
+  // ═══════════════════════════════════════════
+  async function saveHoliday() {
+    if (!holidayForm.date) { showMsg("Date is required!"); return; }
+    if (!holidayForm.title?.trim()) { showMsg("Holiday title is required!"); return; }
+    setSaving(true);
+    try {
+      const data = { ...holidayForm };
+      Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
+      if (holidayForm.editId) {
+        const { editId: eid, ...rest } = data;
+        await updateDoc(doc(db, "holidays", eid), { ...rest, updatedAt: serverTimestamp() });
+        showMsg("Holiday updated!");
+      } else {
+        await addDoc(collection(db, "holidays"), { ...data, createdAt: serverTimestamp() });
+        showMsg("Holiday added!");
+      }
+      setShowHolidayForm(false); setHolidayForm({});
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+  async function deleteHoliday(id) {
+    if (!confirm("Delete this holiday?")) return;
+    try { await deleteDoc(doc(db, "holidays", id)); showMsg("Holiday deleted!"); } catch (e) { showMsg("Error!"); }
+  }
+
+  // ═══════════════════════════════════════════
+  // SCHEDULED NOTIFICATIONS CRUD
+  // ═══════════════════════════════════════════
+  async function saveNotification() {
+    if (!notifForm.date) { showMsg("Date is required!"); return; }
+    if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
+    setSaving(true);
+    try {
+      const data = { ...notifForm };
+      Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
+      if (notifForm.editId) {
+        const { editId: eid, ...rest } = data;
+        await updateDoc(doc(db, "scheduled_notifications", eid), { ...rest, updatedAt: serverTimestamp() });
+        showMsg("Notification updated!");
+      } else {
+        await addDoc(collection(db, "scheduled_notifications"), { ...data, createdAt: serverTimestamp() });
+        showMsg("Notification scheduled!");
+      }
+      setShowNotifForm(false); setNotifForm({});
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+  async function deleteNotification(id) {
+    if (!confirm("Delete this notification?")) return;
+    try { await deleteDoc(doc(db, "scheduled_notifications", id)); showMsg("Notification deleted!"); } catch (e) { showMsg("Error!"); }
+  }
+
+  // ═══════════════════════════════════════════
+  // MANUAL ATTENDANCE
+  // ═══════════════════════════════════════════
+  async function markManualAttendance(student, type) {
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const record = {
+        rfidCode: student.rfidCode || "MANUAL",
+        type: type,
+        studentId: student.id,
+        studentName: student.studentName,
+        studentClass: student.class || student.presentClass || "",
+        studentPhoto: student.photo || "",
+        batchValid: true,
+        batchExpired: false,
+        deviceId: "manual-admin",
+        date: attDate || today,
+        timestamp: new Date().toISOString(),
+        manual: true,
+        markedBy: user?.email || "admin",
+        createdAt: serverTimestamp(),
+      };
+      await addDoc(collection(db, "attendance"), record);
+      showMsg(`${student.studentName} marked as ${type === "in" ? "Present (IN)" : type === "out" ? "Present (OUT)" : "Absent"}`);
+      setManualAttModal(null);
+    } catch (e) { showMsg("Error: " + e.message); }
+  }
+
+  // Mark absent for student
+  async function markAbsent(student) {
+    try {
+      const today = attDate || new Date().toISOString().split("T")[0];
+      const record = {
+        rfidCode: student.rfidCode || "MANUAL",
+        type: "absent",
+        studentId: student.id,
+        studentName: student.studentName,
+        studentClass: student.class || student.presentClass || "",
+        studentPhoto: student.photo || "",
+        batchValid: true,
+        deviceId: "manual-admin",
+        date: today,
+        timestamp: new Date().toISOString(),
+        manual: true,
+        markedBy: user?.email || "admin",
+        createdAt: serverTimestamp(),
+      };
+      await addDoc(collection(db, "attendance"), record);
+      showMsg(`${student.studentName} marked Absent`);
+    } catch (e) { showMsg("Error: " + e.message); }
+  }
+
+  // ═══════════════════════════════════════════
+  // FEE PAYMENT CRUD
+  // ═══════════════════════════════════════════
+  async function addFeePayment(studentId) {
+    if (!feePaymentForm.amount || Number(feePaymentForm.amount) <= 0) { showMsg("Enter valid amount!"); return; }
+    setSaving(true);
+    try {
+      const st = students.find(x => x.id === studentId);
+      const paymentData = {
+        studentId,
+        studentName: st?.studentName || "",
+        studentClass: st?.class || "",
+        amount: Number(feePaymentForm.amount),
+        paymentMode: feePaymentForm.paymentMode || "cash",
+        date: feePaymentForm.date || new Date().toISOString().split("T")[0],
+        note: feePaymentForm.note || "",
+        receivedBy: user?.email || "admin",
+        createdAt: serverTimestamp(),
+      };
+      await addDoc(collection(db, "fee_payments"), paymentData);
+      // Update student's paid amount
+      const prevPaid = Number(st?.enrollmentFeePaid || 0);
+      await updateDoc(doc(db, "students", studentId), {
+        enrollmentFeePaid: String(prevPaid + Number(feePaymentForm.amount)),
+        updatedAt: serverTimestamp(),
+      });
+      showMsg(`₹${feePaymentForm.amount} payment recorded for ${st?.studentName}`);
+      setShowFeePayment(null); setFeePaymentForm({});
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+
+  // Helper: check if a date is a holiday
+  function isHoliday(dateStr) {
+    return holidays.some(h => h.date === dateStr);
+  }
+
+  // Helper: get week dates
+  function getWeekDates(dateStr) {
+    const d = new Date(dateStr);
+    const day = d.getDay();
+    const start = new Date(d);
+    start.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    const dates = [];
+    for (let i = 0; i < 7; i++) {
+      const nd = new Date(start);
+      nd.setDate(start.getDate() + i);
+      dates.push(nd.toISOString().split("T")[0]);
+    }
+    return dates;
+  }
+
+  // Helper: get month dates
+  function getMonthDates(year, month) {
+    const dates = [];
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let i = 1; i <= daysInMonth; i++) {
+      dates.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`);
+    }
+    return dates;
+  }
+
+  // ═══════════════════════════════════════════
   // STYLES
   // ═══════════════════════════════════════════
   const s = {
@@ -900,8 +1117,10 @@ export default function AdminPanel() {
     { id: "enquiries", icon: "fa-envelope", label: "Enquiries" },
     { id: "students", icon: "fa-user-graduate", label: "Students" },
     { id: "materials", icon: "fa-folder-open", label: "Study Materials" },
-    { id: "settings", icon: "fa-cog", label: "Website Settings" },
     { id: "attendance", icon: "fa-id-card-alt", label: "Attendance" },
+    { id: "holidays", icon: "fa-calendar-check", label: "Holidays & Schedule" },
+    { id: "fees", icon: "fa-rupee-sign", label: "Fee Management" },
+    { id: "settings", icon: "fa-cog", label: "Website Settings" },
   ];
 
   const pendingReviews = reviews.filter(r => !r.approved);
@@ -1799,9 +2018,56 @@ export default function AdminPanel() {
             <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
               <ImageUploader folder="students" label="Student Photo (Passport Size)" currentUrl={form.photo || ""} onUpload={(url) => setForm({ ...form, photo: url })} onRemove={() => setForm({ ...form, photo: "" })} />
               <div style={{ flex: 1, minWidth: 200 }}>
-                <label style={s.label}>RFID Number / Code (Digital Attendance)</label>
-                <input style={s.input} placeholder="Scan or enter RFID card number" value={form.rfidCode || ""} onChange={e => setForm({ ...form, rfidCode: e.target.value })} />
-                <p style={{ fontSize: ".68rem", color: "#6B7F99", marginTop: -6 }}>Ye code student ke RFID card se scan hoga attendance ke liye</p>
+                <label style={s.label}>RFID Number / Code (Digital Attendance) <i className="fas fa-id-card" style={{ color: "#7C3AED", fontSize: ".7rem" }} /></label>
+                <input style={{ ...s.input, borderColor: form.rfidCode ? "#86EFAC" : "#C0D0E8", fontFamily: "monospace", letterSpacing: 1 }} placeholder="Scan or enter RFID card number" value={form.rfidCode || ""} onChange={e => setForm({ ...form, rfidCode: e.target.value.toUpperCase().replace(/\s+/g, "").trim() })} />
+                <p style={{ fontSize: ".68rem", color: form.rfidCode ? "#16A34A" : "#6B7F99", marginTop: -6 }}>
+                  {form.rfidCode ? `✓ RFID Set: ${form.rfidCode}` : "Ye code student ke RFID card se scan hoga attendance ke liye"}
+                </p>
+              </div>
+            </div>
+
+            {/* ── BATCH DURATION & ENROLLMENT FEE ── */}
+            <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-calendar-check" style={{ color: "#E11D48" }} /> Batch Duration & Enrollment Fee</div>
+            <div style={{ background: "#FFF7ED", borderRadius: 10, padding: 14, border: "1px solid #FED7AA", marginBottom: 12 }}>
+              <p style={{ fontSize: ".76rem", color: "#9A3412", margin: 0 }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} /> Batch ki start date se student ka attendance count shuru hoga. End date ke baad tap in/out se absent nahi lagega.</p>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={s.label}>Batch Start Date *</label>
+                <input style={s.input} type="date" value={form.batchStartDate || ""} onChange={e => setForm({ ...form, batchStartDate: e.target.value })} />
+              </div>
+              <div>
+                <label style={s.label}>Batch End Date *</label>
+                <input style={s.input} type="date" value={form.batchEndDate || ""} onChange={e => setForm({ ...form, batchEndDate: e.target.value })} />
+              </div>
+              <div>
+                <label style={s.label}>Batch Validity</label>
+                <div style={{ padding: "9px 12px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: ".82rem", fontWeight: 600, color: form.batchStartDate && form.batchEndDate ? "#166534" : "#6B7F99", minHeight: 38, display: "flex", alignItems: "center" }}>
+                  {form.batchStartDate && form.batchEndDate ? (() => {
+                    const start = new Date(form.batchStartDate);
+                    const end = new Date(form.batchEndDate);
+                    const months = Math.round((end - start) / (1000 * 60 * 60 * 24 * 30));
+                    const today = new Date();
+                    const isActive = today >= start && today <= end;
+                    return <><i className={`fas ${isActive ? "fa-check-circle" : "fa-clock"}`} style={{ marginRight: 6, color: isActive ? "#16A34A" : "#D98D04" }} />{months} months {isActive ? "(Active)" : today < start ? "(Upcoming)" : "(Expired)"}</>;
+                  })() : "Start & End date select karo"}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={s.label}>Total Course Fee (₹)</label>
+                <input style={s.input} type="number" placeholder="e.g. 24000" value={form.totalFee || ""} onChange={e => setForm({ ...form, totalFee: e.target.value })} />
+              </div>
+              <div>
+                <label style={s.label}>Enrollment Fee Paid (₹)</label>
+                <input style={s.input} type="number" placeholder="e.g. 5000" value={form.enrollmentFeePaid || ""} onChange={e => setForm({ ...form, enrollmentFeePaid: e.target.value })} />
+              </div>
+              <div>
+                <label style={s.label}>Remaining Fee</label>
+                <div style={{ padding: "9px 12px", borderRadius: 8, background: form.totalFee && form.enrollmentFeePaid ? ((Number(form.totalFee) - Number(form.enrollmentFeePaid)) > 0 ? "#FEF2F2" : "#F0FDF4") : "#F8FAFD", border: "1px solid #D4DEF0", fontSize: ".85rem", fontWeight: 700, color: form.totalFee && form.enrollmentFeePaid ? ((Number(form.totalFee) - Number(form.enrollmentFeePaid)) > 0 ? "#DC2626" : "#16A34A") : "#6B7F99", minHeight: 38, display: "flex", alignItems: "center" }}>
+                  {form.totalFee && form.enrollmentFeePaid ? `₹${Math.max(0, Number(form.totalFee) - Number(form.enrollmentFeePaid)).toLocaleString("en-IN")}` : "—"}
+                </div>
               </div>
             </div>
 
@@ -1938,8 +2204,23 @@ export default function AdminPanel() {
                     <span><i className="fas fa-phone" style={{ marginRight: 3, color: "#6B7F99" }} />{st.studentPhone}</span>
                     {st.board && <span><i className="fas fa-book" style={{ marginRight: 3, color: "#6B7F99" }} />{st.board} · {st.medium}</span>}
                   </div>
-                  <div style={{ fontSize: ".68rem", color: "#6B7F99", marginTop: 2 }}>
-                    Form: {st.formNo || "—"} · {st.fatherName ? `Father: ${st.fatherName}` : ""} · {formatDate(st.createdAt)}
+                  <div style={{ fontSize: ".68rem", color: "#6B7F99", marginTop: 2, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                    <span>Form: {st.formNo || "—"}</span>
+                    {st.fatherName && <span>Father: {st.fatherName}</span>}
+                    <span>{formatDate(st.createdAt)}</span>
+                    {st.batchStartDate && st.batchEndDate && (() => {
+                      const today = new Date().toISOString().split("T")[0];
+                      const isActive = today >= st.batchStartDate && today <= st.batchEndDate;
+                      const isExpired = today > st.batchEndDate;
+                      return <span style={{ color: isActive ? "#16A34A" : isExpired ? "#DC2626" : "#D98D04", fontWeight: 600 }}>
+                        <i className={`fas ${isActive ? "fa-check-circle" : isExpired ? "fa-times-circle" : "fa-clock"}`} style={{ marginRight: 3 }} />
+                        Batch: {st.batchStartDate} → {st.batchEndDate} {isActive ? "(Active)" : isExpired ? "(Expired)" : "(Upcoming)"}
+                      </span>;
+                    })()}
+                    {st.totalFee && <span style={{ color: (Number(st.totalFee) - Number(st.enrollmentFeePaid || 0)) > 0 ? "#DC2626" : "#16A34A", fontWeight: 600 }}>
+                      <i className="fas fa-rupee-sign" style={{ marginRight: 3 }} />
+                      Due: ₹{Math.max(0, Number(st.totalFee) - Number(st.enrollmentFeePaid || 0)).toLocaleString("en-IN")}
+                    </span>}
                   </div>
                 </div>
 
@@ -1975,12 +2256,13 @@ export default function AdminPanel() {
           </div>
         </>}
 
-        {/* ═══════════ ATTENDANCE TAB ═══════════ */}
+        {/* ═══════════ ATTENDANCE TAB (Redesigned) ═══════════ */}
         {tab === "attendance" && <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
             <div>
-              <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}>RFID Attendance</h2>
-              <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Date: {attDate} · {attendance.length} records · Present: {new Set(attendance.filter(a => a.type === "in").map(a => a.studentId)).size} students</p>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-clipboard-list" style={{ marginRight: 8, color: "#1349A8" }} />Attendance Management</h2>
+              <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Register format · RFID + Manual · Daily / Weekly / Monthly view</p>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input type="date" value={attDate} onChange={(e) => setAttDate(e.target.value)} style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".85rem", outline: "none" }} />
@@ -1988,73 +2270,601 @@ export default function AdminPanel() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 20 }}>
+          {/* Sub-tabs: Student | Teacher */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#E8EFF8", borderRadius: 10, padding: 4 }}>
+            {[{ id: "students", icon: "fa-user-graduate", label: "Student Attendance" }, { id: "teachers", icon: "fa-chalkboard-teacher", label: "Teacher Attendance" }].map(st => (
+              <button key={st.id} onClick={() => setAttSubTab(st.id)} style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: "none", background: attSubTab === st.id ? "#fff" : "transparent", color: attSubTab === st.id ? "#1349A8" : "#6B7F99", fontSize: ".82rem", fontWeight: 700, cursor: "pointer", boxShadow: attSubTab === st.id ? "0 2px 8px rgba(0,0,0,.08)" : "none", transition: "all .2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                <i className={`fas ${st.icon}`} style={{ fontSize: ".75rem" }} />{st.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Stats Row */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
             {[
-              { n: new Set(attendance.filter(a => a.type === "in").map(a => a.studentId)).size, l: "Students Present", c: "#16A34A", icon: "fa-user-check" },
+              { n: new Set(attendance.filter(a => a.type === "in" && a.studentId).map(a => a.studentId)).size, l: "Present", c: "#16A34A", icon: "fa-user-check" },
+              { n: students.filter(x => x.status === "active").length - new Set(attendance.filter(a => a.type === "in" && a.studentId).map(a => a.studentId)).size, l: "Absent", c: "#DC2626", icon: "fa-user-times" },
               { n: attendance.filter(a => a.type === "in").length, l: "Check-INs", c: "#1349A8", icon: "fa-sign-in-alt" },
               { n: attendance.filter(a => a.type === "out").length, l: "Check-OUTs", c: "#D98D04", icon: "fa-sign-out-alt" },
-              { n: attendance.filter(a => !a.studentId).length, l: "Unknown RFIDs", c: "#DC2626", icon: "fa-exclamation-triangle" },
+              { n: attendance.filter(a => !a.studentId).length, l: "Unknown RFID", c: "#7C3AED", icon: "fa-question-circle" },
             ].map((x, i) => (
-              <div key={i} style={s.stat}>
-                <i className={`fas ${x.icon}`} style={{ fontSize: "1.3rem", color: x.c, marginBottom: 6 }} />
-                <div style={{ fontSize: "1.6rem", fontWeight: 800, color: x.c }}>{x.n}</div>
-                <div style={{ fontSize: ".76rem", color: "#6B7F99" }}>{x.l}</div>
+              <div key={i} style={{ ...s.stat, padding: 14 }}>
+                <i className={`fas ${x.icon}`} style={{ fontSize: "1.1rem", color: x.c, marginBottom: 4 }} />
+                <div style={{ fontSize: "1.4rem", fontWeight: 800, color: x.c }}>{Math.max(0, x.n)}</div>
+                <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>{x.l}</div>
               </div>
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-            <input style={{ flex: 1, minWidth: 200, border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "9px 12px", fontSize: ".85rem", outline: "none" }} placeholder="Search by name, class, RFID..." value={attSearch} onChange={(e) => setAttSearch(e.target.value)} />
-            <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "9px 12px", fontSize: ".85rem", outline: "none", width: 140 }} value={attFilter} onChange={(e) => setAttFilter(e.target.value)}>
+          {/* View Mode Toggle + Class Filter + Search */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 2, background: "#E8EFF8", borderRadius: 8, padding: 3 }}>
+              {["daily", "weekly", "monthly"].map(vm => (
+                <button key={vm} onClick={() => setAttViewMode(vm)} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: attViewMode === vm ? "#1349A8" : "transparent", color: attViewMode === vm ? "#fff" : "#6B7F99", fontSize: ".74rem", fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{vm}</button>
+              ))}
+            </div>
+            <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} value={attClassFilter} onChange={(e) => setAttClassFilter(e.target.value)}>
+              <option value="all">All Classes</option>
+              {["12th", "11th", "10th", "9th", "8th", "7th", "6th", "5th", "4th", "3rd", "2nd"].map(c => <option key={c} value={c}>Class {c}</option>)}
+            </select>
+            <input style={{ flex: 1, minWidth: 180, border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} placeholder="Search student name, RFID..." value={attSearch} onChange={(e) => setAttSearch(e.target.value)} />
+            <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none", width: 140 }} value={attFilter} onChange={(e) => setAttFilter(e.target.value)}>
               <option value="all">All Records</option>
               <option value="in">Check-IN Only</option>
               <option value="out">Check-OUT Only</option>
               <option value="unknown">Unknown RFID</option>
+              <option value="manual">Manual Only</option>
             </select>
           </div>
 
-          {(() => {
-            let list = attendance;
-            if (attFilter === "in") list = list.filter(a => a.type === "in");
-            else if (attFilter === "out") list = list.filter(a => a.type === "out");
-            else if (attFilter === "unknown") list = list.filter(a => !a.studentId);
-            if (attSearch.trim()) { const q = attSearch.toLowerCase(); list = list.filter(a => a.studentName?.toLowerCase().includes(q) || a.studentClass?.toLowerCase().includes(q) || a.rfidCode?.toLowerCase().includes(q)); }
-            return list.length > 0 ? list.map(a => (
-              <div key={a.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 14, borderLeft: `4px solid ${a.type === "in" ? "#16A34A" : "#D98D04"}` }}>
-                <div style={{ width: 48, height: 48, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: a.type === "in" ? "linear-gradient(135deg,#16A34A,#4ADE80)" : "linear-gradient(135deg,#D98D04,#FBBF24)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {a.studentPhoto && a.studentPhoto.startsWith("http") ? <img src={a.studentPhoto} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <i className={`fas ${a.type === "in" ? "fa-sign-in-alt" : "fa-sign-out-alt"}`} style={{ color: "#fff", fontSize: "1.1rem" }} />}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3, flexWrap: "wrap" }}>
-                    <span style={{ fontWeight: 700, fontSize: ".9rem" }}>{a.studentName || "Unknown Student"}</span>
-                    <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 99, fontSize: ".68rem", fontWeight: 700, color: a.type === "in" ? "#16A34A" : "#D98D04", background: a.type === "in" ? "#F0FDF4" : "#FFFBEB" }}>{a.type === "in" ? "CHECK-IN" : "CHECK-OUT"}</span>
-                    {a.studentClass && <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 99, fontSize: ".68rem", fontWeight: 700, color: "#1349A8", background: "#EFF6FF" }}>Class {a.studentClass}</span>}
-                  </div>
-                  <div style={{ fontSize: ".76rem", color: "#6B7F99", display: "flex", flexWrap: "wrap", gap: 10 }}>
-                    <span><i className="fas fa-id-card" style={{ marginRight: 3 }} />{a.rfidCode}</span>
-                    <span><i className="fas fa-clock" style={{ marginRight: 3 }} />{a.timestamp ? new Date(a.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}</span>
-                    {a.deviceId && <span><i className="fas fa-microchip" style={{ marginRight: 3 }} />{a.deviceId}</span>}
-                  </div>
-                </div>
-                <div style={{ width: 10, height: 10, borderRadius: "50%", background: a.type === "in" ? "#16A34A" : "#D98D04", flexShrink: 0 }} />
+          {/* ═══ STUDENT ATTENDANCE SUB-TAB ═══ */}
+          {attSubTab === "students" && <>
+            {/* Holiday Warning */}
+            {isHoliday(attDate) && (
+              <div style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: 12, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                <i className="fas fa-calendar-times" style={{ color: "#D98D04", fontSize: "1rem" }} />
+                <span style={{ fontSize: ".82rem", fontWeight: 600, color: "#92400E" }}>
+                  <i className="fas fa-info-circle" style={{ marginRight: 4 }} />Today is a Holiday: {holidays.find(h => h.date === attDate)?.title || "Holiday"} — Attendance will not count as absent
+                </span>
               </div>
-            )) : (
-              <div style={{ ...s.card, textAlign: "center", padding: 48 }}>
-                <i className="fas fa-id-card-alt" style={{ fontSize: "2.5rem", color: "#B0C4DC", marginBottom: 12 }} />
-                <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#4A5E78", marginBottom: 6 }}>No Attendance Records</h3>
-                <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>{attDate === new Date().toISOString().split("T")[0] ? "Aaj abhi tak koi record nahi. RFID device se tap karenge to yahan dikhega." : "Is date ka koi record nahi."}</p>
+            )}
+
+            {/* Register Format Table */}
+            <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+              <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", margin: 0 }}>
+                  <i className="fas fa-book-open" style={{ marginRight: 8, color: "#1349A8" }} />
+                  Attendance Register — {attViewMode === "daily" ? attDate : attViewMode === "weekly" ? "This Week" : "This Month"}
+                </h3>
+                <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>
+                  {attClassFilter !== "all" ? `Class ${attClassFilter}` : "All Classes"}
+                </span>
+              </div>
+
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".8rem" }}>
+                <thead>
+                  <tr style={{ background: "#F0F4FA" }}>
+                    <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, color: "#1C2E44", borderBottom: "2px solid #D4DEF0", position: "sticky", left: 0, background: "#F0F4FA", zIndex: 2, minWidth: 50 }}>#</th>
+                    <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, color: "#1C2E44", borderBottom: "2px solid #D4DEF0", position: "sticky", left: 50, background: "#F0F4FA", zIndex: 2, minWidth: 180 }}>Student Name</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#1C2E44", borderBottom: "2px solid #D4DEF0", minWidth: 70 }}>Class</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#1C2E44", borderBottom: "2px solid #D4DEF0", minWidth: 100 }}>RFID</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A", borderBottom: "2px solid #D4DEF0", minWidth: 90 }}>Check-IN</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#D98D04", borderBottom: "2px solid #D4DEF0", minWidth: 90 }}>Check-OUT</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#1C2E44", borderBottom: "2px solid #D4DEF0", minWidth: 80 }}>Status</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#1C2E44", borderBottom: "2px solid #D4DEF0", minWidth: 100 }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    let stList = students.filter(x => x.status === "active");
+                    if (attClassFilter !== "all") stList = stList.filter(x => x.class === attClassFilter);
+                    if (attSearch.trim()) {
+                      const q = attSearch.toLowerCase();
+                      stList = stList.filter(x => x.studentName?.toLowerCase().includes(q) || x.rfidCode?.toLowerCase().includes(q));
+                    }
+                    // Check batch validity for each student
+                    const today = attDate;
+                    stList = stList.filter(st => {
+                      if (!st.batchStartDate || !st.batchEndDate) return true; // no batch dates = show always
+                      return today >= st.batchStartDate && today <= st.batchEndDate;
+                    });
+
+                    if (stList.length === 0) return (
+                      <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>
+                        <i className="fas fa-user-graduate" style={{ fontSize: "2rem", color: "#B0C4DC", display: "block", marginBottom: 8 }} />
+                        {attClassFilter !== "all" ? `Class ${attClassFilter} me koi active student nahi` : "Koi active student nahi"}
+                      </td></tr>
+                    );
+
+                    return stList.map((st, idx) => {
+                      const stAtt = attendance.filter(a => a.studentId === st.id);
+                      const checkIn = stAtt.find(a => a.type === "in");
+                      const checkOut = stAtt.find(a => a.type === "out");
+                      const isAbsentManual = stAtt.find(a => a.type === "absent");
+                      const isPresent = !!checkIn;
+                      const isHol = isHoliday(attDate);
+
+                      return (
+                        <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                          <td style={{ padding: "10px 14px", fontWeight: 600, color: "#6B7F99", position: "sticky", left: 0, background: idx % 2 === 0 ? "#fff" : "#FAFCFE", zIndex: 1 }}>{idx + 1}</td>
+                          <td style={{ padding: "10px 14px", position: "sticky", left: 50, background: idx % 2 === 0 ? "#fff" : "#FAFCFE", zIndex: 1 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ width: 32, height: 32, borderRadius: 8, overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#1349A8,#2A6FE0)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                {st.photo && st.photo.startsWith("http") ? <img src={st.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".7rem" }}>{st.studentName?.charAt(0)}</span>}
+                              </div>
+                              <span style={{ fontWeight: 600, fontSize: ".82rem" }}>{st.studentName}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: "10px 14px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
+                          <td style={{ padding: "10px 14px", textAlign: "center", fontFamily: "monospace", fontSize: ".72rem", color: st.rfidCode ? "#7C3AED" : "#DC2626" }}>{st.rfidCode || "No RFID"}</td>
+                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                            {checkIn ? (
+                              <div>
+                                <span style={{ color: "#16A34A", fontWeight: 700, fontSize: ".78rem" }}>
+                                  {new Date(checkIn.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                                {checkIn.manual && <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>Manual</div>}
+                              </div>
+                            ) : <span style={{ color: "#B0C4DC" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                            {checkOut ? (
+                              <div>
+                                <span style={{ color: "#D98D04", fontWeight: 700, fontSize: ".78rem" }}>
+                                  {new Date(checkOut.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                                {checkOut.manual && <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>Manual</div>}
+                              </div>
+                            ) : <span style={{ color: "#B0C4DC" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                            {isHol ? <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>
+                              : isPresent ? <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>
+                              : isAbsentManual ? <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>
+                              : <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>}
+                          </td>
+                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                            {!isPresent && !isAbsentManual && !isHol && (
+                              <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                                <button onClick={() => markManualAttendance(st, "in")} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }} title="Mark Present">
+                                  <i className="fas fa-check" style={{ marginRight: 3 }} />P
+                                </button>
+                                <button onClick={() => markAbsent(st)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }} title="Mark Absent">
+                                  <i className="fas fa-times" style={{ marginRight: 3 }} />A
+                                </button>
+                              </div>
+                            )}
+                            {isPresent && !checkOut && (
+                              <button onClick={() => markManualAttendance(st, "out")} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }} title="Mark Check-OUT">
+                                <i className="fas fa-sign-out-alt" style={{ marginRight: 3 }} />OUT
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Unknown RFID Taps */}
+            {attendance.filter(a => !a.studentId).length > 0 && (
+              <div style={{ ...s.card, border: "2px solid #FCA5A5" }}>
+                <h4 style={{ fontSize: ".9rem", fontWeight: 700, color: "#DC2626", marginBottom: 12 }}>
+                  <i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />Unknown RFID Taps ({attendance.filter(a => !a.studentId).length})
+                </h4>
+                {attendance.filter(a => !a.studentId).map(a => (
+                  <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #FEE2E2", fontSize: ".82rem" }}>
+                    <span style={{ fontFamily: "monospace", color: "#7C3AED", fontWeight: 700 }}>{a.rfidCode}</span>
+                    <span style={{ color: "#6B7F99" }}>{a.type === "in" ? "IN" : "OUT"}</span>
+                    <span style={{ color: "#6B7F99" }}>{a.timestamp ? new Date(a.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}</span>
+                    <span style={{ marginLeft: "auto", fontSize: ".72rem", color: "#DC2626" }}>Students tab me RFID assign karo</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>}
+
+          {/* ═══ TEACHER ATTENDANCE SUB-TAB ═══ */}
+          {attSubTab === "teachers" && <>
+            <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+              <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4" }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", margin: 0 }}>
+                  <i className="fas fa-chalkboard-teacher" style={{ marginRight: 8, color: "#059669" }} />
+                  Teacher Attendance — {attDate}
+                </h3>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".82rem" }}>
+                <thead>
+                  <tr style={{ background: "#F0F4FA" }}>
+                    <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                    <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Teacher Name</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Subject</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teachers.length > 0 ? teachers.map((t, idx) => {
+                    const tAtt = attendance.filter(a => a.rfidCode === `TEACHER_${t.id}` || (a.studentId === `teacher_${t.id}`));
+                    const tPresent = tAtt.length > 0;
+                    const isHol = isHoliday(attDate);
+                    return (
+                      <tr key={t.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                        <td style={{ padding: "10px 14px", fontWeight: 600, color: "#6B7F99" }}>{idx + 1}</td>
+                        <td style={{ padding: "10px 14px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ width: 32, height: 32, borderRadius: 8, overflow: "hidden", background: "linear-gradient(135deg,#059669,#34D399)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              {t.photo && t.photo.startsWith("http") ? <img src={t.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".7rem" }}>{t.name?.charAt(0)}</span>}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600 }}>{t.name}</div>
+                              {t.isDirector && <span style={{ fontSize: ".62rem", color: "#D98D04", fontWeight: 700 }}>DIRECTOR</span>}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}><span style={s.badge("#7C3AED", "#FAF5FF")}>{t.subject}</span></td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {isHol ? <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>
+                            : tPresent ? <span style={s.badge("#16A34A", "#F0FDF4")}>Present</span>
+                            : <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {!tPresent && !isHol && (
+                            <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                              <button onClick={async () => {
+                                try {
+                                  await addDoc(collection(db, "attendance"), {
+                                    rfidCode: `TEACHER_${t.id}`, type: "in", studentId: `teacher_${t.id}`,
+                                    studentName: t.name, studentClass: "Teacher", studentPhoto: t.photo || "",
+                                    deviceId: "manual-admin", date: attDate, timestamp: new Date().toISOString(),
+                                    manual: true, isTeacher: true, markedBy: user?.email, createdAt: serverTimestamp(),
+                                  });
+                                  showMsg(`${t.name} marked Present`);
+                                } catch (e) { showMsg("Error: " + e.message); }
+                              }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
+                                <i className="fas fa-check" style={{ marginRight: 3 }} />Present
+                              </button>
+                              <button onClick={async () => {
+                                try {
+                                  await addDoc(collection(db, "attendance"), {
+                                    rfidCode: `TEACHER_${t.id}`, type: "absent", studentId: `teacher_${t.id}`,
+                                    studentName: t.name, studentClass: "Teacher", studentPhoto: t.photo || "",
+                                    deviceId: "manual-admin", date: attDate, timestamp: new Date().toISOString(),
+                                    manual: true, isTeacher: true, markedBy: user?.email, createdAt: serverTimestamp(),
+                                  });
+                                  showMsg(`${t.name} marked Absent`);
+                                } catch (e) { showMsg("Error: " + e.message); }
+                              }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
+                                <i className="fas fa-times" style={{ marginRight: 3 }} />Absent
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  }) : (
+                    <tr><td colSpan={5} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>
+                      Teachers tab me pehle teachers add karo
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>}
+
+          {/* Tips */}
+          <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
+            <div>
+              <strong>Attendance System Tips:</strong><br />
+              • RFID card tap = auto check-in/out · RFID match nahi hua? Students tab me RFID code check karo<br />
+              • Manual P/A buttons se teacher bhi attendance mark kar sakte hain (card bhul gaya to)<br />
+              • Holiday add karo Holidays tab se — holiday ke din absent nahi lagega<br />
+              • Batch expired students automatically hide ho jayenge register se<br />
+              • Teacher attendance bhi daily track karo
+            </div>
+          </div>
+        </>}
+
+        {/* ═══════════ HOLIDAYS & SCHEDULE TAB ═══════════ */}
+        {tab === "holidays" && <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-calendar-check" style={{ marginRight: 8, color: "#7C3AED" }} />Holidays & Scheduled Notifications</h2>
+              <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Manage holidays, events calendar, and send notifications to students & parents</p>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => { setShowHolidayForm(true); setHolidayForm({}); }} style={s.btnP}><i className="fas fa-plus" style={{ marginRight: 6 }} />Add Holiday</button>
+              <button onClick={() => { setShowNotifForm(true); setNotifForm({}); }} style={s.btnO}><i className="fas fa-bell" style={{ marginRight: 6 }} />Schedule Notification</button>
+            </div>
+          </div>
+
+          {/* Calendar View */}
+          <div style={{ ...s.card }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <button onClick={() => { if (calMonth === 0) { setCalMonth(11); setCalYear(calYear - 1); } else setCalMonth(calMonth - 1); }} style={s.btnGray}><i className="fas fa-chevron-left" /></button>
+              <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#0B1826" }}>
+                {new Date(calYear, calMonth).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
+              </h3>
+              <button onClick={() => { if (calMonth === 11) { setCalMonth(0); setCalYear(calYear + 1); } else setCalMonth(calMonth + 1); }} style={s.btnGray}><i className="fas fa-chevron-right" /></button>
+            </div>
+
+            {/* Day Headers */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
+              {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
+                <div key={d} style={{ textAlign: "center", fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", padding: 6 }}>{d}</div>
+              ))}
+            </div>
+
+            {/* Calendar Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+              {(() => {
+                const firstDay = new Date(calYear, calMonth, 1).getDay();
+                const offset = firstDay === 0 ? 6 : firstDay - 1;
+                const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+                const cells = [];
+                for (let i = 0; i < offset; i++) cells.push(<div key={`e${i}`} />);
+                for (let d = 1; d <= daysInMonth; d++) {
+                  const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                  const hol = holidays.find(h => h.date === dateStr);
+                  const notif = notifications.filter(n => n.date === dateStr);
+                  const isToday = dateStr === new Date().toISOString().split("T")[0];
+                  const isSun = new Date(calYear, calMonth, d).getDay() === 0;
+                  cells.push(
+                    <div key={d} style={{ minHeight: 70, padding: 6, borderRadius: 8, border: isToday ? "2px solid #1349A8" : "1px solid #E8EFF8", background: hol ? "#FEF3C7" : isSun ? "#FFF1F2" : "#fff", position: "relative", cursor: "pointer" }}
+                      onClick={() => { if (!hol) { setShowHolidayForm(true); setHolidayForm({ date: dateStr }); } }}>
+                      <div style={{ fontSize: ".75rem", fontWeight: isToday ? 800 : 600, color: isToday ? "#1349A8" : isSun ? "#DC2626" : "#1C2E44" }}>{d}</div>
+                      {hol && <div style={{ fontSize: ".58rem", color: "#92400E", fontWeight: 600, marginTop: 2, lineHeight: 1.3 }}><i className="fas fa-star" style={{ marginRight: 2, fontSize: ".5rem" }} />{hol.title}</div>}
+                      {notif.map((n, ni) => (
+                        <div key={ni} style={{ fontSize: ".55rem", color: "#7C3AED", fontWeight: 600, marginTop: 1, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <i className="fas fa-bell" style={{ marginRight: 2, fontSize: ".45rem" }} />{n.message?.substring(0, 20)}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+                return cells;
+              })()}
+            </div>
+          </div>
+
+          {/* Holiday Form */}
+          {showHolidayForm && (
+            <div style={{ ...s.card, border: "2px solid #7C3AED" }}>
+              <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#7C3AED", marginBottom: 14 }}><i className="fas fa-calendar-plus" style={{ marginRight: 8 }} />{holidayForm.editId ? "Edit" : "Add"} Holiday</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 10 }}>
+                <div><label style={s.label}>Date *</label><input style={s.input} type="date" value={holidayForm.date || ""} onChange={e => setHolidayForm({ ...holidayForm, date: e.target.value })} /></div>
+                <div><label style={s.label}>Holiday Title *</label><input style={s.input} placeholder="e.g. Republic Day, Holi" value={holidayForm.title || ""} onChange={e => setHolidayForm({ ...holidayForm, title: e.target.value })} /></div>
+                <div><label style={s.label}>Type</label>
+                  <select style={s.input} value={holidayForm.type || ""} onChange={e => setHolidayForm({ ...holidayForm, type: e.target.value })}>
+                    <option value="">Select</option><option>National Holiday</option><option>Festival</option><option>Institute Holiday</option><option>Exam Break</option><option>Other</option>
+                  </select>
+                </div>
+              </div>
+              <div><label style={s.label}>Description (optional)</label><input style={s.input} placeholder="Any additional details..." value={holidayForm.description || ""} onChange={e => setHolidayForm({ ...holidayForm, description: e.target.value })} /></div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button onClick={saveHoliday} disabled={saving} style={s.btnP}><i className="fas fa-save" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Save Holiday"}</button>
+                <button onClick={() => { setShowHolidayForm(false); setHolidayForm({}); }} style={s.btnGray}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Notification Form */}
+          {showNotifForm && (
+            <div style={{ ...s.card, border: "2px solid #D98D04" }}>
+              <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#D98D04", marginBottom: 14 }}><i className="fas fa-bell" style={{ marginRight: 8 }} />Schedule Notification</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div><label style={s.label}>Date *</label><input style={s.input} type="date" value={notifForm.date || ""} onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} /></div>
+                <div><label style={s.label}>Time to Send</label><input style={s.input} type="time" value={notifForm.time || ""} onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} /></div>
+                <div><label style={s.label}>Send To</label>
+                  <select style={s.input} value={notifForm.target || "all"} onChange={e => setNotifForm({ ...notifForm, target: e.target.value })}>
+                    <option value="all">All Students & Parents</option><option value="students">Students Only</option><option value="parents">Parents Only</option>
+                    <option value="12th">Class 12 Only</option><option value="11th">Class 11 Only</option><option value="10th">Class 10 Only</option><option value="9th">Class 9 Only</option>
+                  </select>
+                </div>
+              </div>
+              <div><label style={s.label}>Notification Type</label>
+                <select style={s.input} value={notifForm.notifType || ""} onChange={e => setNotifForm({ ...notifForm, notifType: e.target.value })}>
+                  <option value="">Select Type</option><option value="test">Test / Exam</option><option value="holiday">Holiday Notice</option><option value="fee">Fee Reminder</option><option value="event">Event</option><option value="general">General</option>
+                </select>
+              </div>
+              <div><label style={s.label}>Message *</label><textarea style={{ ...s.input, height: 80, resize: "none" }} placeholder="e.g. Kal 10th class ka Science test hai 10:00 AM se..." value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} /></div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button onClick={saveNotification} disabled={saving} style={s.btnP}><i className="fas fa-paper-plane" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Schedule"}</button>
+                <button onClick={() => { setShowNotifForm(false); setNotifForm({}); }} style={s.btnGray}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Holiday List */}
+          <div style={{ ...s.card }}>
+            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}><i className="fas fa-list" style={{ marginRight: 6, color: "#7C3AED" }} />All Holidays ({holidays.length})</h3>
+            {holidays.length > 0 ? holidays.map(h => (
+              <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #E8EFF8" }}>
+                <div style={{ width: 44, textAlign: "center" }}>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#7C3AED" }}>{new Date(h.date + "T00:00:00").getDate()}</div>
+                  <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>{new Date(h.date + "T00:00:00").toLocaleDateString("en-IN", { month: "short" })}</div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: ".86rem" }}>{h.title}</div>
+                  <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>{h.type || ""} {h.description ? `· ${h.description}` : ""}</div>
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => { setShowHolidayForm(true); setHolidayForm({ ...h, editId: h.id }); }} style={s.btnO}><i className="fas fa-edit" /></button>
+                  <button onClick={() => deleteHoliday(h.id)} style={s.btnD}><i className="fas fa-trash" /></button>
+                </div>
+              </div>
+            )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi holiday add nahi hua abhi tak. Calendar me click karo ya "Add Holiday" button use karo.</p>}
+          </div>
+
+          {/* Notification List */}
+          <div style={{ ...s.card }}>
+            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}><i className="fas fa-bell" style={{ marginRight: 6, color: "#D98D04" }} />Scheduled Notifications ({notifications.length})</h3>
+            {notifications.length > 0 ? notifications.map(n => (
+              <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #E8EFF8" }}>
+                <div style={{ width: 44, textAlign: "center" }}>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#D98D04" }}>{new Date(n.date + "T00:00:00").getDate()}</div>
+                  <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>{new Date(n.date + "T00:00:00").toLocaleDateString("en-IN", { month: "short" })}</div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: ".86rem" }}>{n.message}</div>
+                  <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>
+                    {n.notifType && <span style={s.badge("#7C3AED", "#FAF5FF")}>{n.notifType}</span>}
+                    {" "}{n.time || ""} · Target: {n.target || "all"}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => { setShowNotifForm(true); setNotifForm({ ...n, editId: n.id }); }} style={s.btnO}><i className="fas fa-edit" /></button>
+                  <button onClick={() => deleteNotification(n.id)} style={s.btnD}><i className="fas fa-trash" /></button>
+                </div>
+              </div>
+            )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi notification scheduled nahi hai. "Schedule Notification" button use karo.</p>}
+          </div>
+        </>}
+
+        {/* ═══════════ FEE MANAGEMENT TAB ═══════════ */}
+        {tab === "fees" && <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-rupee-sign" style={{ marginRight: 8, color: "#059669" }} />Fee Management</h2>
+              <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Track student fees, payments, and send reminders</p>
+            </div>
+          </div>
+
+          {/* Fee Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+            {(() => {
+              const totalFees = students.reduce((sum, st) => sum + Number(st.totalFee || 0), 0);
+              const totalPaid = students.reduce((sum, st) => sum + Number(st.enrollmentFeePaid || 0), 0);
+              const totalDue = totalFees - totalPaid;
+              const fullyPaid = students.filter(st => st.totalFee && Number(st.enrollmentFeePaid || 0) >= Number(st.totalFee)).length;
+              return [
+                { n: `₹${totalFees.toLocaleString("en-IN")}`, l: "Total Fees", c: "#1349A8", icon: "fa-money-bill-wave" },
+                { n: `₹${totalPaid.toLocaleString("en-IN")}`, l: "Total Collected", c: "#16A34A", icon: "fa-check-circle" },
+                { n: `₹${Math.max(0, totalDue).toLocaleString("en-IN")}`, l: "Total Due", c: "#DC2626", icon: "fa-exclamation-circle" },
+                { n: fullyPaid, l: "Fully Paid", c: "#059669", icon: "fa-user-check" },
+              ].map((x, i) => (
+                <div key={i} style={s.stat}>
+                  <i className={`fas ${x.icon}`} style={{ fontSize: "1.2rem", color: x.c, marginBottom: 4 }} />
+                  <div style={{ fontSize: "1.3rem", fontWeight: 800, color: x.c }}>{x.n}</div>
+                  <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>{x.l}</div>
+                </div>
+              ));
+            })()}
+          </div>
+
+          {/* Filters */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} value={feeClassFilter} onChange={(e) => setFeeClassFilter(e.target.value)}>
+              <option value="all">All Classes</option>
+              {["12th", "11th", "10th", "9th", "8th", "7th", "6th", "5th", "4th", "3rd", "2nd"].map(c => <option key={c} value={c}>Class {c}</option>)}
+            </select>
+            <input style={{ flex: 1, minWidth: 200, border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} placeholder="Search student..." value={feeSearch} onChange={(e) => setFeeSearch(e.target.value)} />
+          </div>
+
+          {/* Fee Table */}
+          <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".82rem" }}>
+              <thead>
+                <tr style={{ background: "#F0F4FA" }}>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Student</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Class</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Total Fee</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A", borderBottom: "2px solid #D4DEF0" }}>Paid</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#DC2626", borderBottom: "2px solid #D4DEF0" }}>Due</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  let feeList = students.filter(x => x.status === "active");
+                  if (feeClassFilter !== "all") feeList = feeList.filter(x => x.class === feeClassFilter);
+                  if (feeSearch.trim()) { const q = feeSearch.toLowerCase(); feeList = feeList.filter(x => x.studentName?.toLowerCase().includes(q)); }
+
+                  if (feeList.length === 0) return <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No students found</td></tr>;
+
+                  return feeList.map((st, idx) => {
+                    const total = Number(st.totalFee || 0);
+                    const paid = Number(st.enrollmentFeePaid || 0);
+                    const due = Math.max(0, total - paid);
+                    const isFullyPaid = total > 0 && paid >= total;
+                    return (
+                      <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                        <td style={{ padding: "10px 14px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                        <td style={{ padding: "10px 14px" }}>
+                          <div style={{ fontWeight: 600 }}>{st.studentName}</div>
+                          <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>{st.studentPhone}</div>
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
+                        <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 600 }}>{total > 0 ? `₹${total.toLocaleString("en-IN")}` : "—"}</td>
+                        <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A" }}>{paid > 0 ? `₹${paid.toLocaleString("en-IN")}` : "—"}</td>
+                        <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: due > 0 ? "#DC2626" : "#16A34A" }}>{total > 0 ? `₹${due.toLocaleString("en-IN")}` : "—"}</td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {total === 0 ? <span style={s.badge("#6B7F99", "#F0F4FA")}>No Fee</span>
+                            : isFullyPaid ? <span style={s.badge("#16A34A", "#F0FDF4")}>Paid</span>
+                            : <span style={s.badge("#DC2626", "#FEF2F2")}>Due</span>}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                            {!isFullyPaid && total > 0 && (
+                              <button onClick={() => { setShowFeePayment(st.id); setFeePaymentForm({ date: new Date().toISOString().split("T")[0] }); }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
+                                <i className="fas fa-plus" style={{ marginRight: 3 }} />Pay
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Fee Payment Modal */}
+          {showFeePayment && (() => {
+            const st = students.find(x => x.id === showFeePayment);
+            if (!st) return null;
+            const due = Math.max(0, Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0));
+            return (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setShowFeePayment(null)}>
+                <div style={{ background: "#fff", borderRadius: 16, padding: 28, maxWidth: 420, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.15)" }} onClick={e => e.stopPropagation()}>
+                  <h3 style={{ fontSize: "1.05rem", fontWeight: 800, marginBottom: 4 }}>Record Fee Payment</h3>
+                  <p style={{ fontSize: ".82rem", color: "#6B7F99", marginBottom: 16 }}>{st.studentName} · Class {st.class} · Due: <strong style={{ color: "#DC2626" }}>₹{due.toLocaleString("en-IN")}</strong></p>
+                  <div><label style={s.label}>Amount (₹) *</label><input style={s.input} type="number" placeholder={`Max: ${due}`} value={feePaymentForm.amount || ""} onChange={e => setFeePaymentForm({ ...feePaymentForm, amount: e.target.value })} /></div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div><label style={s.label}>Payment Mode</label>
+                      <select style={s.input} value={feePaymentForm.paymentMode || "cash"} onChange={e => setFeePaymentForm({ ...feePaymentForm, paymentMode: e.target.value })}>
+                        <option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank Transfer</option><option value="other">Other</option>
+                      </select>
+                    </div>
+                    <div><label style={s.label}>Date</label><input style={s.input} type="date" value={feePaymentForm.date || ""} onChange={e => setFeePaymentForm({ ...feePaymentForm, date: e.target.value })} /></div>
+                  </div>
+                  <div><label style={s.label}>Note (optional)</label><input style={s.input} placeholder="e.g. 2nd installment" value={feePaymentForm.note || ""} onChange={e => setFeePaymentForm({ ...feePaymentForm, note: e.target.value })} /></div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => addFeePayment(showFeePayment)} disabled={saving} style={{ ...s.btnP, flex: 1 }}>
+                      <i className="fas fa-check" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Record Payment"}
+                    </button>
+                    <button onClick={() => setShowFeePayment(null)} style={s.btnGray}>Cancel</button>
+                  </div>
+                </div>
               </div>
             );
           })()}
 
+          {/* Tips */}
           <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
             <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
             <div>
-              <strong>RFID Attendance Tips:</strong><br />
-              • Student ka RFID code Students tab mein daalo — attendance auto match hoga<br />
-              • IN reader tap = Check-IN, OUT reader tap = Check-OUT<br />
-              • Date picker se purane din ki attendance dekho<br />
-              • Real-time update — device se data aate hi dikhega
+              <strong>Fee Management Tips:</strong><br />
+              • Admission form me Total Fee aur Enrollment Fee Paid bharo<br />
+              • "Pay" button se installment wise payment record karo<br />
+              • Due amount auto-calculate hota hai<br />
+              • Fee payments history "fee_payments" collection me save hoti hai
             </div>
           </div>
         </>}
