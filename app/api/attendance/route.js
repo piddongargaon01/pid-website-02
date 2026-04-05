@@ -2,30 +2,25 @@ import { NextResponse } from "next/server";
 import admin from "firebase-admin";
 
 // ═══════════════════════════════════════════
-// BULLETPROOF FIREBASE ADMIN INIT
+// CLEAN & SIMPLE FIREBASE INIT
 // ═══════════════════════════════════════════
 if (!admin.apps.length) {
   try {
-    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    let privateKey = process.env.FIREBASE_PRIVATE_KEY;
-
-    if (!projectId || !clientEmail || !privateKey) {
-      console.error("❌ Error: Firebase environment variables are missing!");
+    const envVar = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    
+    if (!envVar) {
+      console.error("❌ Error: FIREBASE_SERVICE_ACCOUNT_KEY is missing!");
     } else {
-      // 1. Agar Vercel ne extra quotes lagaye hain, toh unhe hatayein
-      privateKey = privateKey.replace(/^"|"$/g, '');
-      privateKey = privateKey.replace(/^'|'$/g, '');
-      
-      // 2. Literal "\n" ko asli Line Break mein badlein (Yeh sabse pakka tarika hai)
-      privateKey = privateKey.split('\\n').join('\n');
+      // Vercel se aane wale raw JSON ko direct parse karna
+      const serviceAccount = JSON.parse(envVar.trim());
+
+      // Line breaks ko specifically check aur fix karna
+      if (serviceAccount.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+      }
 
       admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: projectId,
-          clientEmail: clientEmail,
-          privateKey: privateKey,
-        }),
+        credential: admin.credential.cert(serviceAccount),
       });
       console.log("✅ Firebase Admin Initialized Successfully");
     }
