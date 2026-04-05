@@ -7,12 +7,12 @@ if (!admin.apps.length) {
     const serviceKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 
     if (!serviceKey) {
-      console.error("❌ Error: FIREBASE_SERVICE_ACCOUNT_KEY is missing in .env");
+      console.error("❌ Error: FIREBASE_SERVICE_ACCOUNT_KEY is missing in Environment Variables");
     } else {
-      // JSON parse karein
+      // JSON parse karein (Agar string hai toh parse karein, warna object use karein)
       const serviceAccount = typeof serviceKey === 'string' ? JSON.parse(serviceKey) : serviceKey;
 
-      // Sabse important fix: Private Key ke \n (line breaks) ko sahi karna
+      // PEM Error Fix: Private Key ke \n (line breaks) ko sahi karna
       if (serviceAccount.private_key) {
         serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
       }
@@ -135,6 +135,7 @@ export async function GET(request) {
     const records = snap.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
+      // Timestamp fix for JSON
       createdAt: doc.data().createdAt?.toDate ? doc.data().createdAt.toDate() : doc.data().createdAt
     }));
 
