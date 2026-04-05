@@ -1,18 +1,24 @@
 import { NextResponse } from "next/server";
 import admin from "firebase-admin";
 
-// 1. ROOT FIX: Alag-alag variables use karna
+// ═══════════════════════════════════════════
+// BULLETPROOF FIREBASE ADMIN INIT
+// ═══════════════════════════════════════════
 if (!admin.apps.length) {
   try {
-    const projectId = process.env.FIREBASE_PROJECT_ID;
+    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
     let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
     if (!projectId || !clientEmail || !privateKey) {
-      console.error("❌ Error: Firebase environment variables are missing");
+      console.error("❌ Error: Firebase environment variables are missing!");
     } else {
-      // Ye line kisi bhi format ke line-breaks ko hamesha theek kar degi
-      privateKey = privateKey.replace(/\\n/g, '\n').replace(/"/g, '');
+      // 1. Agar Vercel ne extra quotes lagaye hain, toh unhe hatayein
+      privateKey = privateKey.replace(/^"|"$/g, '');
+      privateKey = privateKey.replace(/^'|'$/g, '');
+      
+      // 2. Literal "\n" ko asli Line Break mein badlein (Yeh sabse pakka tarika hai)
+      privateKey = privateKey.split('\\n').join('\n');
 
       admin.initializeApp({
         credential: admin.credential.cert({
