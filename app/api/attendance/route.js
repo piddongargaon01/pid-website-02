@@ -1,136 +1,133 @@
-import { initializeApp, getApps } from "firebase/app";
-import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs } from "firebase/firestore";
 import { NextResponse } from "next/server";
+import admin from "firebase-admin";
 
-// Firebase config — same as firebase.js
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
+// 1. Firebase Admin Initialization (Singleton Pattern)
+if (!admin.apps.length) {
+  try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log("✅ Firebase Admin Initialized Successfully");
+  } catch (error) {
+    console.error("❌ Firebase Admin Init Error:", error.message);
+  }
+}
 
-// Initialize Firebase for API route
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db = admin.firestore();
 
 // ═══════════════════════════════════════════
-// POST — Device sends attendance data
+// POST — RFID Device sends data here
 // ═══════════════════════════════════════════
 export async function POST(request) {
   try {
     const body = await request.json();
     const { rfidCode, type, deviceId, secret } = body;
 
-    // Normalize RFID — uppercase, strip ALL whitespace
-    const rfidUpper = rfidCode ? rfidCode.toString().toUpperCase().replace(/\s+/g, "").trim() : "";
-    if (!rfidUpper || !type) {
-      return NextResponse.json({ error: "rfidCode and type required" }, { status: 400 });
-    }
-
-    // Verify API secret
+    // A. Security Check (Secret Key Match)
     const apiSecret = process.env.ATTENDANCE_API_SECRET || "pid_rfid_2026";
     if (secret !== apiSecret) {
       return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
     }
 
-    // ═══ Find student by RFID code ═══
-    let studentData = null;
-    try {
-      const q = query(collection(db, "students"), where("rfidCode", "==", rfidUpper));
-      const snap = await getDocs(q);
-
-      if (!snap.empty) {
-        const docSnap = snap.docs[0];
-        studentData = { studentId: docSnap.id, ...docSnap.data() };
-        console.log(`✅ RFID Match: "${rfidUpper}" → ${studentData.studentName} (ID: ${docSnap.id})`);
-      } else {
-        console.log(`❌ RFID No Match: "${rfidUpper}" — No student found`);
-        // Debug: list all registered RFIDs
-        try {
-          const allSnap = await getDocs(collection(db, "students"));
-          const rfidList = allSnap.docs
-            .map(d => ({ name: d.data().studentName, rfid: d.data().rfidCode }))
-            .filter(s => s.rfid);
-          console.log(`📋 All registered RFIDs:`, JSON.stringify(rfidList));
-        } catch (debugErr) {
-          console.log("Debug list failed:", debugErr.message);
-        }
-      }
-    } catch (e) {
-      console.error("🔥 Student lookup FAILED:", e.message);
-      console.error("⚠️  This usually means Firestore Security Rules are blocking the read!");
-      console.error("⚠️  Fix: Update rules to allow read on 'students' collection without auth.");
+    // B. RFID Normalization
+    const rfidUpper = rfidCode ? rfidCode.toString().toUpperCase().replace(/\s+/g, "").trim() : "";
+    if (!rfidUpper || !type) {
+      return NextResponse.json({ error: "rfidCode and type required" }, { status: 400 });
     }
 
-    // ═══ Check batch validity ═══
+    // C. Find Student by RFID (Admin Way)
+    const studentSnap = await db.collection("students")
+      .where("rfidCode", "==", rfidUpper)
+      .limit(1)
+      .get();
+
+    let studentData = null;
+    let studentId = null;
+
+    if (!studentSnap.empty) {
+      const doc = studentSnap.docs[0];
+      studentId = doc.id;
+      studentData = doc.data();
+    }
+
+    // D. Check Batch Validity
     let batchValid = true;
     let batchExpired = false;
     if (studentData) {
       const today = new Date().toISOString().split("T")[0];
       const startDate = studentData.batchStartDate || "";
       const endDate = studentData.batchEndDate || "";
-      if (startDate && today < startDate) {
-        batchValid = false;
-      }
+      
+      if (startDate && today < startDate) batchValid = false;
       if (endDate && today > endDate) {
         batchValid = false;
         batchExpired = true;
       }
     }
 
-    // ═══ Save attendance record ═══
+    // E. Prepare Record
     const record = {
       rfidCode: rfidUpper,
-      type: type,
-      studentId: studentData?.studentId || null,
-      studentName: studentData?.studentName || "Unknown",
-      studentClass: studentData?.class || studentData?.presentClass || "",
+      type: type, // "in" or "out"
+      studentId: studentId,
+      studentName: studentData?.name || studentData?.studentName || "Unknown Student",
+      studentClass: studentData?.class || studentData?.presentClass || "N/A",
       studentPhoto: studentData?.photo || "",
       batchValid: batchValid,
       batchExpired: batchExpired,
       deviceId: deviceId || "device-1",
-      date: new Date().toISOString().split("T")[0],
+      date: new Date().toISOString().split("T")[0], // YYYY-MM-DD for easy filtering
       timestamp: new Date().toISOString(),
-      createdAt: serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(), // Server side timestamp
     };
 
-    await addDoc(collection(db, "attendance"), record);
+    // F. Save to 'attendance' collection
+    await db.collection("attendance").add(record);
 
-    console.log(`📝 Attendance saved: ${record.studentName} [${type}] RFID:${rfidUpper}`);
+    console.log(`📝 Attendance saved: ${record.studentName} [${type}]`);
 
     return NextResponse.json({
       success: true,
       student: record.studentName,
-      class: record.studentClass,
       type: type,
-      batchValid: batchValid,
-      batchExpired: batchExpired,
-      matched: !!studentData,
+      matched: !!studentData
     }, { status: 200 });
 
   } catch (error) {
-    console.error("❌ Attendance API Error:", error);
+    console.error("❌ Attendance POST Error:", error);
     return NextResponse.json({ error: "Server error: " + error.message }, { status: 500 });
   }
 }
 
 // ═══════════════════════════════════════════
-// GET — Fetch attendance records
+// GET — Fetch attendance for Dashboard
 // ═══════════════════════════════════════════
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const date = searchParams.get("date") || new Date().toISOString().split("T")[0];
 
-    const q = query(collection(db, "attendance"), where("date", "==", date));
-    const snap = await getDocs(q);
-    const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    records.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
+    const snap = await db.collection("attendance")
+      .where("date", "==", date)
+      .get();
 
-    return NextResponse.json({ success: true, date, count: records.length, records }, { status: 200 });
+    const records = snap.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      // Firestore timestamp ko JSON readable banane ke liye
+      createdAt: doc.data().createdAt?.toDate ? doc.data().createdAt.toDate() : doc.data().createdAt
+    }));
+
+    // Time ke hisab se sort karein (Latest First)
+    records.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    return NextResponse.json({ 
+      success: true, 
+      date, 
+      count: records.length, 
+      records 
+    }, { status: 200 });
 
   } catch (error) {
     console.error("❌ GET Attendance Error:", error);
