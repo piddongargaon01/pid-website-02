@@ -374,6 +374,50 @@ const DEFAULT_COURSES = {
 };
 
 export default function AdminPanel() {
+  // ═══ BATCH OPTIONS (Class + Medium + Board) — As per PID Course Structure ═══
+  const BATCH_OPTIONS = [
+    // Class 12th
+    { value: "12th-Eng-CBSE-ICSE", label: "12th English (CBSE+ICSE)", class: "12th", medium: "English", boards: ["CBSE", "ICSE"] },
+    { value: "12th-Hindi-CG-CBSE", label: "12th Hindi (CG+CBSE)", class: "12th", medium: "Hindi", boards: ["CG", "CBSE"] },
+    { value: "12th-Eng-CG", label: "12th English (CG Board)", class: "12th", medium: "English", boards: ["CG"] },
+    // Class 11th
+    { value: "11th-Eng-CBSE-ICSE", label: "11th English (CBSE+ICSE)", class: "11th", medium: "English", boards: ["CBSE", "ICSE"] },
+    { value: "11th-Hindi-CG-CBSE", label: "11th Hindi (CG+CBSE)", class: "11th", medium: "Hindi", boards: ["CG", "CBSE"] },
+    { value: "11th-Eng-CG", label: "11th English (CG Board)", class: "11th", medium: "English", boards: ["CG"] },
+    // Class 10th
+    { value: "10th-Eng-All", label: "10th English (CG+CBSE+ICSE)", class: "10th", medium: "English", boards: ["CG", "CBSE", "ICSE"] },
+    { value: "10th-Hindi-CG-CBSE", label: "10th Hindi (CG+CBSE)", class: "10th", medium: "Hindi", boards: ["CG", "CBSE"] },
+    // Class 9th
+    { value: "9th-Eng-All", label: "9th English (CG+CBSE+ICSE)", class: "9th", medium: "English", boards: ["CG", "CBSE", "ICSE"] },
+    { value: "9th-Hindi-CG-CBSE", label: "9th Hindi (CG+CBSE)", class: "9th", medium: "Hindi", boards: ["CG", "CBSE"] },
+    // Junior Classes
+    { value: "2nd-8th-All", label: "2nd-8th All Medium (CG+CBSE+ICSE)", class: "2nd-8th", medium: "All", boards: ["CG", "CBSE", "ICSE"] },
+    // Entrance Coaching
+    { value: "Navodaya", label: "Navodaya Entrance", class: "Navodaya", medium: "All", boards: [] },
+    { value: "Prayas", label: "Prayas Awasiya Vidyalaya", class: "Prayas", medium: "All", boards: [] },
+    // Competition Exam
+    { value: "JEE-NEET", label: "IIT-JEE & NEET (9th-12th)", class: "JEE-NEET", medium: "All", boards: [] },
+  ];
+
+  // Helper: filter students by batch value
+  function filterByBatch(list, batchValue) {
+    if (batchValue === "all") return list;
+    const batch = BATCH_OPTIONS.find(b => b.value === batchValue);
+    if (!batch) {
+      return list.filter(x => x.class === batchValue || x.class?.includes(batchValue.replace("th", "")));
+    }
+    // JEE-NEET = all students from 9th to 12th
+    if (batch.class === "JEE-NEET") {
+      return list.filter(x => ["9th", "10th", "11th", "12th"].includes(x.class));
+    }
+    return list.filter(x => {
+      const classMatch = x.class === batch.class || x.presentClass === batch.class;
+      const mediumMatch = batch.medium === "All" || !x.medium || x.medium === batch.medium;
+      const boardMatch = !batch.boards || batch.boards.length === 0 || !x.board || batch.boards.includes(x.board);
+      return classMatch && mediumMatch && boardMatch;
+    });
+  }
+
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("dashboard");
@@ -402,10 +446,21 @@ export default function AdminPanel() {
   const [attSubTab, setAttSubTab] = useState("students"); // students | teachers
   const [attClassFilter, setAttClassFilter] = useState("all");
   const [attViewMode, setAttViewMode] = useState("daily"); // daily | weekly | monthly
-  const [manualAttModal, setManualAttModal] = useState(null); // student object for manual marking
+  const [manualAttModal, setManualAttModal] = useState(null);
   const [manualAttType, setManualAttType] = useState("present");
-
-  // Holidays & Notifications states
+  // Individual teacher/student attendance calendar
+  const [attSelectedPerson, setAttSelectedPerson] = useState(null); // {id, name, type: "teacher"|"student", photo}
+  const [personAttData, setPersonAttData] = useState([]); // individual person ka full month attendance
+  const [personCalMonth, setPersonCalMonth] = useState(new Date().getMonth());
+  const [personCalYear, setPersonCalYear] = useState(new Date().getFullYear());
+  // Weekly/Monthly teacher attendance data
+  const [attRangeData, setAttRangeData] = useState([]); // weekly/monthly range ka data
+  const [multiDayAtt, setMultiDayAtt] = useState([]);
+  const [multiDayLoading, setMultiDayLoading] = useState(false);
+  const [calendarStudent, setCalendarStudent] = useState(null);
+  const [calMonthAtt, setCalMonthAtt] = useState([]);
+  const [calStudentMonth, setCalStudentMonth] = useState(new Date().getMonth());
+  const [calStudentYear, setCalStudentYear] = useState(new Date().getFullYear());
   const [holidays, setHolidays] = useState([]);
   const [holidayForm, setHolidayForm] = useState({});
   const [showHolidayForm, setShowHolidayForm] = useState(false);
@@ -414,6 +469,44 @@ export default function AdminPanel() {
   const [showNotifForm, setShowNotifForm] = useState(false);
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
   const [calYear, setCalYear] = useState(new Date().getFullYear());
+
+  // ═══ RECORDS SECTION STATES ═══
+  const [recMainTab, setRecMainTab] = useState("attendance"); // attendance | students | teachers | fees
+  const [recClassFilter, setRecClassFilter] = useState("all"); // BATCH_OPTIONS value ya "all"
+  const [recWeekOffset, setRecWeekOffset] = useState(0);
+  const [recData, setRecData] = useState([]);
+  const [recLoading, setRecLoading] = useState(false);
+  const [recShowHistory, setRecShowHistory] = useState(false);
+
+  // ═══ BATCH/SESSION YEAR (Auto April-March) ═══
+  const getCurrentBatchYear = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    return month >= 3 ? year : year - 1;
+  };
+  const [recBatchYear, setRecBatchYear] = useState(getCurrentBatchYear());
+
+  // ═══ CLASS CATEGORIES (Image ke according) ═══
+  const CLASS_CATEGORIES = [
+    // Foundation Courses
+    { id: "12th-Eng-CBSE-ICSE", label: "12th English (CBSE+ICSE)", shortLabel: "12 Eng CB+IC", icon: "fa-user-graduate", color: "#1349A8" },
+    { id: "12th-Hindi-CG-CBSE", label: "12th Hindi (CG+CBSE)", shortLabel: "12 Hin CG+CB", icon: "fa-user-graduate", color: "#2A6FE0" },
+    { id: "12th-Eng-CG", label: "12th English (CG Board)", shortLabel: "12 Eng CG", icon: "fa-user-graduate", color: "#3B82F6" },
+    { id: "11th-Eng-CBSE-ICSE", label: "11th English (CBSE+ICSE)", shortLabel: "11 Eng CB+IC", icon: "fa-user-graduate", color: "#059669" },
+    { id: "11th-Hindi-CG-CBSE", label: "11th Hindi (CG+CBSE)", shortLabel: "11 Hin CG+CB", icon: "fa-user-graduate", color: "#16A34A" },
+    { id: "11th-Eng-CG", label: "11th English (CG Board)", shortLabel: "11 Eng CG", icon: "fa-user-graduate", color: "#4ADE80" },
+    { id: "10th-Eng-All", label: "10th English (CG+CBSE+ICSE)", shortLabel: "10 Eng All", icon: "fa-user-graduate", color: "#7C3AED" },
+    { id: "10th-Hindi-CG-CBSE", label: "10th Hindi (CG+CBSE)", shortLabel: "10 Hin CG+CB", icon: "fa-user-graduate", color: "#A78BFA" },
+    { id: "9th-Eng-All", label: "9th English (CG+CBSE+ICSE)", shortLabel: "9 Eng All", icon: "fa-user-graduate", color: "#D98D04" },
+    { id: "9th-Hindi-CG-CBSE", label: "9th Hindi (CG+CBSE)", shortLabel: "9 Hin CG+CB", icon: "fa-user-graduate", color: "#F5AC10" },
+    { id: "2nd-8th-All", label: "2nd-8th All Medium (CG+CBSE+ICSE)", shortLabel: "2-8 All", icon: "fa-child", color: "#DC2626" },
+    // Entrance
+    { id: "Navodaya", label: "Navodaya Entrance", shortLabel: "Navodaya", icon: "fa-award", color: "#0891B2" },
+    { id: "Prayas", label: "Prayas Awasiya Vidyalaya", shortLabel: "Prayas", icon: "fa-award", color: "#0E7490" },
+    // Competition
+    { id: "JEE-NEET", label: "IIT-JEE & NEET (9th-12th)", shortLabel: "JEE+NEET", icon: "fa-flask", color: "#BE185D" },
+  ];
 
   // Fees states
   const [feeClassFilter, setFeeClassFilter] = useState("all");
@@ -512,6 +605,41 @@ export default function AdminPanel() {
     return () => unsubs.forEach(u => u());
   }, [isAdmin]);
 
+  // Individual person attendance calendar listener
+  useEffect(() => {
+    if (!isAdmin || !attSelectedPerson) return;
+    const firstDay = `${personCalYear}-${String(personCalMonth + 1).padStart(2, "0")}-01`;
+    const lastDay = `${personCalYear}-${String(personCalMonth + 1).padStart(2, "0")}-${new Date(personCalYear, personCalMonth + 1, 0).getDate()}`;
+    const personKey = attSelectedPerson.type === "teacher" ? `teacher_${attSelectedPerson.id}` : attSelectedPerson.id;
+    const q = query(collection(db, "attendance"), where("studentId", "==", personKey), where("date", ">=", firstDay), where("date", "<=", lastDay));
+    const unsub = onSnapshot(q, (snap) => {
+      setPersonAttData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, [isAdmin, attSelectedPerson, personCalMonth, personCalYear]);
+
+  // Weekly/Monthly range attendance listener
+  useEffect(() => {
+    if (!isAdmin || attViewMode === "daily") { setAttRangeData([]); return; }
+    let startDate, endDate;
+    const d = new Date(attDate);
+    if (attViewMode === "weekly") {
+      const day = d.getDay() || 7;
+      const mon = new Date(d); mon.setDate(d.getDate() - day + 1);
+      const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+      startDate = mon.toISOString().split("T")[0];
+      endDate = sun.toISOString().split("T")[0];
+    } else {
+      startDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+      endDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()}`;
+    }
+    const q = query(collection(db, "attendance"), where("date", ">=", startDate), where("date", "<=", endDate));
+    const unsub = onSnapshot(q, (snap) => {
+      setAttRangeData(snap.docs.map(d2 => ({ id: d2.id, ...d2.data() })));
+    });
+    return () => unsub();
+  }, [isAdmin, attViewMode, attDate]);
+
   // Attendance listener (date-based)
   useEffect(() => {
     if (!isAdmin || !attDate) return;
@@ -524,8 +652,184 @@ export default function AdminPanel() {
     return () => unsub();
   }, [isAdmin, attDate]);
 
+  // Multi-day attendance fetch (weekly/monthly)
+  useEffect(() => {
+    if (!isAdmin || attViewMode === "daily") { setMultiDayAtt([]); return; }
+    let dates = [];
+    if (attViewMode === "weekly") {
+      dates = getWeekDates(attDate);
+    } else if (attViewMode === "monthly") {
+      const d = new Date(attDate);
+      dates = getMonthDates(d.getFullYear(), d.getMonth());
+    }
+    if (dates.length === 0) return;
+    setMultiDayLoading(true);
+    const fetchMulti = async () => {
+      try {
+        const startDate = dates[0];
+        const endDate = dates[dates.length - 1];
+        const q = query(collection(db, "attendance"), where("date", ">=", startDate), where("date", "<=", endDate));
+        const snap = await getDocs(q);
+        const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setMultiDayAtt(arr);
+      } catch (e) { console.error("Multi-day fetch error:", e); setMultiDayAtt([]); }
+      setMultiDayLoading(false);
+    };
+    fetchMulti();
+  }, [isAdmin, attViewMode, attDate]);
+
+  // Per-student calendar fetch
+  async function fetchStudentCalendar(student, year, month) {
+    setCalendarStudent(student);
+    setCalStudentMonth(month);
+    setCalStudentYear(year);
+    try {
+      const startDate = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const endDate = `${year}-${String(month + 1).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+      const q = query(collection(db, "attendance"), where("date", ">=", startDate), where("date", "<=", endDate), where("studentId", "==", student.id));
+      const snap = await getDocs(q);
+      const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setCalMonthAtt(arr);
+    } catch (e) { console.error("Calendar fetch error:", e); setCalMonthAtt([]); }
+  }
+
   function showMsg(t) { setMsg(t); setTimeout(() => setMsg(""), 3000); }
   function resetForm() { setShowForm(false); setEditId(null); setForm({}); }
+
+  // ═══ ATTENDANCE RECORDS — Weekly Data Fetch ═══
+  function getArWeekDates(offset = 0) {
+    const today = new Date();
+    const d = new Date(today);
+    d.setDate(d.getDate() + (offset * 7));
+    const day = d.getDay();
+    const mon = new Date(d);
+    mon.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    const dates = [];
+    for (let i = 0; i < 7; i++) {
+      const nd = new Date(mon);
+      nd.setDate(mon.getDate() + i);
+      dates.push(nd.toISOString().split("T")[0]);
+    }
+    return dates;
+  }
+
+  function getArWeekLabel(offset = 0) {
+    const dates = getArWeekDates(offset);
+    const s = new Date(dates[0]);
+    const e = new Date(dates[6]);
+    return `${s.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} — ${e.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`;
+  }
+
+  useEffect(() => {
+    if (!isAdmin || tab !== "records") return;
+    // Attendance record ke liye weekly data fetch
+    if (recMainTab === "attendance") {
+      const dates = getArWeekDates(recWeekOffset);
+      const startDate = dates[0];
+      const endDate = dates[6];
+      const batchStart = `${recBatchYear}-04-01`;
+      const batchEnd = `${recBatchYear + 1}-03-31`;
+      if (endDate < batchStart || startDate > batchEnd) {
+        setRecData([]);
+        setRecLoading(false);
+        return;
+      }
+      setRecLoading(true);
+      const q = query(collection(db, "attendance"), where("date", ">=", startDate), where("date", "<=", endDate));
+      const unsub = onSnapshot(q, (snap) => {
+        setRecData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRecLoading(false);
+      });
+      return () => unsub();
+    }
+  }, [isAdmin, tab, recWeekOffset, recBatchYear, recMainTab]);
+
+  // ═══ Attendance Records — Excel Export (A4 Structured) ═══
+ function exportRecordsExcel() {
+    const dates = getArWeekDates(recWeekOffset);
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let personList = [];
+    let sectionLabel = "";
+
+    if (recMainTab === "teachers" || (recMainTab === "attendance" && recClassFilter === "all-teachers")) {
+      personList = teachers.map(t => ({
+        id: `teacher_${t.id}`,
+        name: t.name,
+        classLabel: "Teacher — " + (t.subject || ""),
+        rfidCode: t.rfidCode || "",
+        batchStart: t.cardValidFrom || "",
+        batchEnd: t.cardValidTo || "",
+        isExpired: t.cardValidTo ? new Date().toISOString().split("T")[0] > t.cardValidTo : false,
+      }));
+      sectionLabel = "Teachers";
+    } else {
+      const cat = CLASS_CATEGORIES.find(c => c.id === recClassFilter);
+      sectionLabel = cat ? cat.label : "All Students";
+      let stList = [...students];
+      if (recClassFilter !== "all" && cat) {
+        stList = filterByBatch(stList, cat.id);
+      }
+      personList = stList.map(st => ({
+        id: st.id,
+        name: st.studentName,
+        classLabel: `${st.class || "N/A"} · ${st.medium || ""} · ${st.board || ""}`,
+        rfidCode: st.rfidCode || "",
+        batchStart: st.batchStartDate || "",
+        batchEnd: st.batchEndDate || "",
+        isExpired: st.batchEndDate ? new Date().toISOString().split("T")[0] > st.batchEndDate : false,
+      }));
+    }
+
+    let csv = "";
+    csv += `"PATEL INSTITUTE DONGARGAON (PID)"\n`;
+    csv += `"Reg. No. 122201880553"\n`;
+    csv += `"Batch / Session: ${recBatchYear}-${String(recBatchYear + 1).slice(2)}"\n`;
+    csv += `"${recMainTab === "attendance" ? "ATTENDANCE" : recMainTab === "students" ? "STUDENT" : recMainTab === "teachers" ? "TEACHER" : "FEE"} RECORD — ${sectionLabel}"\n`;
+    csv += `"Week: ${getArWeekLabel(recWeekOffset)}"\n`;
+    csv += `"Generated: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}"\n`;
+    csv += `\n`;
+
+    csv += `"Sr","Name","Class / Medium / Board","RFID","Batch Period",`;
+    csv += dates.map(d => {
+      const dt = new Date(d + "T00:00:00");
+      return `"${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')} ${dayNames[dt.getDay()]}"`;
+    }).join(",");
+    csv += `,"Total P","Total A","Attendance %","Status"\n`;
+
+    personList.forEach((p, idx) => {
+      let totalP = 0, totalA = 0, totalWorking = 0;
+      const row = dates.map(d => {
+        const isHol = isHoliday(d);
+        const isSun = new Date(d + "T00:00:00").getDay() === 0;
+        if (isHol) return "H";
+        if (isSun) return "S";
+        totalWorking++;
+        const dayAtt = recData.filter(a => a.studentId === p.id && a.date === d);
+        const hasIn = dayAtt.some(a => a.type === "in");
+        if (hasIn) { totalP++; return "P"; }
+        const isFuture = d > new Date().toISOString().split("T")[0];
+        if (!isFuture) { totalA++; return "A"; }
+        return "-";
+      });
+      const pct = totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0;
+      const batchLabel = p.batchStart && p.batchEnd ? `${p.batchStart} to ${p.batchEnd}` : "Not Set";
+      const statusLabel = p.isExpired ? "EXPIRED" : "ACTIVE";
+      csv += `${idx + 1},"${p.name}","${p.classLabel}","${p.rfidCode}","${batchLabel}",${row.map(r => `"${r}"`).join(",")},${totalP},${totalA},${pct}%,"${statusLabel}"\n`;
+    });
+
+    csv += `\n`;
+    csv += `"Director Signature: _______________","","","Teacher Signature: _______________","","","","","","","","",""\n`;
+
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `PID_Record_${sectionLabel.replace(/\s+/g, "_")}_Batch${recBatchYear}_Week_${getArWeekDates(recWeekOffset)[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showMsg(`${sectionLabel} Record exported! Excel me open karke A4 print karo.`);
+  }
 
   // ═══════════════════════════════════════════
   // COURSES CRUD
@@ -736,6 +1040,16 @@ export default function AdminPanel() {
     setSaving(true);
     try {
       const data = { ...form };
+      // RFID Normalization
+      if (data.rfidCode) {
+        data.rfidCode = data.rfidCode.toString().toUpperCase().replace(/\s+/g, "").trim();
+        // Check duplicate RFID in teachers
+        const rfidDupTeacher = teachers.find(t => t.id !== editId && t.rfidCode === data.rfidCode);
+        if (rfidDupTeacher) { showMsg(`RFID "${data.rfidCode}" already assigned to teacher ${rfidDupTeacher.name}!`); setSaving(false); return; }
+        // Check duplicate RFID in students too
+        const rfidDupStudent = students.find(st => st.rfidCode === data.rfidCode);
+        if (rfidDupStudent) { showMsg(`RFID "${data.rfidCode}" already assigned to student ${rfidDupStudent.studentName}! Teacher aur student ka RFID same nahi ho sakta.`); setSaving(false); return; }
+      }
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
       if (editId) {
         const { id, ...rest } = data;
@@ -1026,8 +1340,28 @@ export default function AdminPanel() {
   }
 
   // Helper: check if a date is a holiday
-  function isHoliday(dateStr) {
-    return holidays.some(h => h.date === dateStr);
+  // Check if date is holiday (optionally for a specific student)
+  function isHoliday(dateStr, student) {
+    return holidays.some(h => {
+      if (h.date !== dateStr) return false;
+      // If holiday is for all students OR no holidayFor set
+      if (!h.holidayFor || h.holidayFor === "all") return true;
+      // If holiday is for specific classes & student is provided
+      if (h.holidayFor === "specific" && student && h.holidayClasses?.length > 0) {
+        return h.holidayClasses.some(batchVal => {
+          const batch = BATCH_OPTIONS.find(b => b.value === batchVal);
+          if (!batch) return false;
+          if (batch.class === "JEE-NEET") return ["9th", "10th", "11th", "12th"].includes(student.class);
+          const classMatch = student.class === batch.class || student.presentClass === batch.class;
+          const mediumMatch = batch.medium === "All" || !student.medium || student.medium === batch.medium;
+          const boardMatch = !batch.boards || batch.boards.length === 0 || !student.board || batch.boards.includes(student.board);
+          return classMatch && mediumMatch && boardMatch;
+        });
+      }
+      // If specific but no student provided, still show as holiday in general calendar
+      if (h.holidayFor === "specific") return false;
+      return true;
+    });
   }
 
   // Helper: get week dates
@@ -1053,6 +1387,75 @@ export default function AdminPanel() {
       dates.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`);
     }
     return dates;
+  }
+
+  // ═══════════════════════════════════════════
+  // EXCEL EXPORT (Attendance)
+  // ═══════════════════════════════════════════
+  function exportAttendanceExcel(mode) {
+    let dates = [];
+    let attData = [];
+    if (mode === "daily") {
+      dates = [attDate];
+      attData = attendance;
+    } else if (mode === "weekly") {
+      dates = getWeekDates(attDate);
+      attData = multiDayAtt;
+    } else {
+      const d = new Date(attDate);
+      dates = getMonthDates(d.getFullYear(), d.getMonth());
+      attData = multiDayAtt;
+    }
+
+    let stList = students.filter(x => x.status === "active");
+    if (attClassFilter !== "all") stList = filterByBatch(stList, attClassFilter);
+
+    // Build CSV
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let csv = "";
+
+    if (mode === "daily") {
+      csv = "Sr,Student Name,Class,RFID,Check-IN,Check-OUT,Status\n";
+      stList.forEach((st, idx) => {
+        const stAtt = attData.filter(a => a.studentId === st.id);
+        const checkIn = stAtt.find(a => a.type === "in");
+        const checkOut = stAtt.find(a => a.type === "out");
+        const isHol = isHoliday(attDate);
+        const status = isHol ? "Holiday" : checkIn ? "Present" : stAtt.find(a => a.type === "absent") ? "Absent" : "—";
+        const inTime = checkIn ? new Date(checkIn.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
+        const outTime = checkOut ? new Date(checkOut.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
+        csv += `${idx + 1},"${st.studentName}",${st.class || ""},${st.rfidCode || ""},${inTime},${outTime},${status}\n`;
+      });
+    } else {
+      // Weekly / Monthly — dates as columns
+      csv = "Sr,Student Name,Class," + dates.map(d => { const dt = new Date(d + "T00:00:00"); return `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")} ${dayNames[dt.getDay()]}`; }).join(",") + ",Total P,Total A\n";
+      stList.forEach((st, idx) => {
+        let totalP = 0, totalA = 0;
+        const row = dates.map(d => {
+          const isHol = isHoliday(d);
+          if (isHol) return "H";
+          const dayAtt = attData.filter(a => a.studentId === st.id && a.date === d);
+          const hasIn = dayAtt.some(a => a.type === "in");
+          const hasAbsent = dayAtt.some(a => a.type === "absent");
+          if (hasIn) { totalP++; return "P"; }
+          if (hasAbsent) { totalA++; return "A"; }
+          // If date is in the past and no record = absent
+          if (d < new Date().toISOString().split("T")[0]) { totalA++; return "A"; }
+          return "—";
+        });
+        csv += `${idx + 1},"${st.studentName}",${st.class || ""},${row.join(",")},${totalP},${totalA}\n`;
+      });
+    }
+
+    // Download CSV
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `PID_Attendance_${mode}_${attDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showMsg(`${mode.charAt(0).toUpperCase() + mode.slice(1)} attendance exported!`);
   }
 
   // ═══════════════════════════════════════════
@@ -1118,6 +1521,7 @@ export default function AdminPanel() {
     { id: "students", icon: "fa-user-graduate", label: "Students" },
     { id: "materials", icon: "fa-folder-open", label: "Study Materials" },
     { id: "attendance", icon: "fa-id-card-alt", label: "Attendance" },
+    { id: "records", icon: "fa-archive", label: "Records" },
     { id: "holidays", icon: "fa-calendar-check", label: "Holidays & Schedule" },
     { id: "fees", icon: "fa-rupee-sign", label: "Fee Management" },
     { id: "settings", icon: "fa-cog", label: "Website Settings" },
@@ -1710,6 +2114,46 @@ export default function AdminPanel() {
               <div><label style={s.label}>Display Order</label><input style={s.input} type="number" placeholder="1, 2, 3..." value={form.order || ""} onChange={e => setForm({ ...form, order: parseInt(e.target.value) || 0 })} /></div>
             </div>
 
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={s.label}><i className="fas fa-id-card" style={{ marginRight: 4, color: "#7C3AED" }} />RFID Card Code</label>
+                <input style={{ ...s.input, fontFamily: "monospace", letterSpacing: 1 }} placeholder="e.g. A3B5C7D9 (RFID card scan/type karo)" value={form.rfidCode || ""} onChange={e => setForm({ ...form, rfidCode: e.target.value.toUpperCase().replace(/\s+/g, "").trim() })} />
+                {form.rfidCode && <div style={{ fontSize: ".68rem", color: "#7C3AED", marginTop: -6, marginBottom: 6 }}><i className="fas fa-check-circle" style={{ marginRight: 3 }} />RFID: {form.rfidCode}</div>}
+              </div>
+              <div>
+                <label style={s.label}>Phone Number</label>
+                <input style={s.input} placeholder="e.g. 9876543210" value={form.phone || ""} onChange={e => setForm({ ...form, phone: e.target.value })} />
+              </div>
+            </div>
+
+            {/* ── RFID CARD VALIDITY PERIOD ── */}
+            <div style={{ background: "#FAF5FF", borderRadius: 10, padding: 14, border: "1px solid #E9D5FF", marginBottom: 12 }}>
+              <p style={{ fontSize: ".76rem", color: "#6B21A8", margin: "0 0 10px 0", fontWeight: 600 }}><i className="fas fa-clock" style={{ marginRight: 4 }} /> RFID Card Validity — Session/Batch Duration</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={s.label}>Card Valid From *</label>
+                  <input style={s.input} type="date" value={form.cardValidFrom || ""} onChange={e => setForm({ ...form, cardValidFrom: e.target.value })} />
+                </div>
+                <div>
+                  <label style={s.label}>Card Valid To *</label>
+                  <input style={s.input} type="date" value={form.cardValidTo || ""} onChange={e => setForm({ ...form, cardValidTo: e.target.value })} />
+                </div>
+                <div>
+                  <label style={s.label}>Card Status</label>
+                  <div style={{ padding: "9px 12px", borderRadius: 8, background: form.cardValidFrom && form.cardValidTo ? (() => { const t = new Date().toISOString().split("T")[0]; return t >= form.cardValidFrom && t <= form.cardValidTo ? "#F0FDF4" : t > form.cardValidTo ? "#FEF2F2" : "#FFFBEB"; })() : "#F8FAFD", border: "1px solid #D4DEF0", fontSize: ".82rem", fontWeight: 600, color: form.cardValidFrom && form.cardValidTo ? (() => { const t = new Date().toISOString().split("T")[0]; return t >= form.cardValidFrom && t <= form.cardValidTo ? "#16A34A" : t > form.cardValidTo ? "#DC2626" : "#D98D04"; })() : "#6B7F99", minHeight: 38, display: "flex", alignItems: "center" }}>
+                    {form.cardValidFrom && form.cardValidTo ? (() => {
+                      const t = new Date().toISOString().split("T")[0];
+                      const isActive = t >= form.cardValidFrom && t <= form.cardValidTo;
+                      const isExpired = t > form.cardValidTo;
+                      const months = Math.round((new Date(form.cardValidTo) - new Date(form.cardValidFrom)) / (1000 * 60 * 60 * 24 * 30));
+                      return <><i className={`fas ${isActive ? "fa-check-circle" : isExpired ? "fa-times-circle" : "fa-clock"}`} style={{ marginRight: 6 }} />{months} months {isActive ? "(Active)" : isExpired ? "(Expired)" : "(Upcoming)"}</>;
+                    })() : "Valid From & To date select karo"}
+                  </div>
+                </div>
+              </div>
+              <p style={{ fontSize: ".68rem", color: "#7C3AED", marginTop: 8, marginBottom: 0 }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />Is duration ke andar hi teacher ka RFID card se attendance lagegi. Expire hone par card deactivate ho jayega.</p>
+            </div>
+
             <ImageUploader
               folder="teachers"
               label="Teacher Photo"
@@ -1762,7 +2206,20 @@ export default function AdminPanel() {
                   {t.qualification && <span><i className="fas fa-graduation-cap" style={{ marginRight: 4, color: "#6B7F99" }} />{t.qualification}</span>}
                   {t.experience && <span><i className="fas fa-briefcase" style={{ marginRight: 4, color: "#6B7F99" }} />{t.experience}</span>}
                   {t.classes && <span><i className="fas fa-chalkboard" style={{ marginRight: 4, color: "#6B7F99" }} />{t.classes}</span>}
+                  {t.rfidCode && <span><i className="fas fa-id-card" style={{ marginRight: 4, color: "#7C3AED" }} /><span style={{ fontFamily: "monospace", fontSize: ".72rem" }}>{t.rfidCode}</span></span>}
                 </div>
+                {/* RFID Card Validity Status */}
+                {t.cardValidFrom && t.cardValidTo && (() => {
+                  const today = new Date().toISOString().split("T")[0];
+                  const isActive = today >= t.cardValidFrom && today <= t.cardValidTo;
+                  const isExpired = today > t.cardValidTo;
+                  return <div style={{ fontSize: ".72rem", color: isActive ? "#16A34A" : isExpired ? "#DC2626" : "#D98D04", marginTop: 4, fontWeight: 600 }}>
+                    <i className={`fas ${isActive ? "fa-check-circle" : isExpired ? "fa-times-circle" : "fa-clock"}`} style={{ marginRight: 4 }} />
+                    Card: {t.cardValidFrom} → {t.cardValidTo} {isActive ? "(Active)" : isExpired ? "(Expired — RFID Deactivated)" : "(Upcoming)"}
+                  </div>;
+                })()}
+                {!t.cardValidFrom && t.rfidCode && <div style={{ fontSize: ".72rem", color: "#D98D04", marginTop: 4 }}><i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />Card validity dates set nahi hain — Edit karke add karo</div>}
+                {!t.rfidCode && <div style={{ fontSize: ".72rem", color: "#DC2626", marginTop: 4 }}><i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />RFID card assign nahi hua — Edit karke RFID add karo</div>}
                 {(!t.photo || !t.photo.startsWith("http")) && <div style={{ fontSize: ".72rem", color: "#D98D04", marginTop: 4 }}><i className="fas fa-camera" style={{ marginRight: 4 }} />Photo not added yet</div>}
               </div>
 
@@ -2267,6 +2724,7 @@ export default function AdminPanel() {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input type="date" value={attDate} onChange={(e) => setAttDate(e.target.value)} style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".85rem", outline: "none" }} />
               <button onClick={() => setAttDate(new Date().toISOString().split("T")[0])} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", color: "#4A5E78", fontSize: ".78rem", fontWeight: 600, cursor: "pointer" }}>Today</button>
+              <button onClick={() => exportAttendanceExcel(attViewMode)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#059669", fontSize: ".78rem", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}><i className="fas fa-file-excel" />Export {attViewMode.charAt(0).toUpperCase() + attViewMode.slice(1)}</button>
             </div>
           </div>
 
@@ -2305,7 +2763,27 @@ export default function AdminPanel() {
             </div>
             <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} value={attClassFilter} onChange={(e) => setAttClassFilter(e.target.value)}>
               <option value="all">All Classes</option>
-              {["12th", "11th", "10th", "9th", "8th", "7th", "6th", "5th", "4th", "3rd", "2nd"].map(c => <option key={c} value={c}>Class {c}</option>)}
+              <optgroup label="Class 12th">
+                {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Class 11th">
+                {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Class 10th">
+                {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Class 9th">
+                {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Junior Classes">
+                {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Entrance Coaching">
+                {BATCH_OPTIONS.filter(b => b.class === "Navodaya" || b.class === "Prayas").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Competition Exam">
+                {BATCH_OPTIONS.filter(b => b.class === "JEE-NEET").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
             </select>
             <input style={{ flex: 1, minWidth: 180, border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} placeholder="Search student name, RFID..." value={attSearch} onChange={(e) => setAttSearch(e.target.value)} />
             <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none", width: 140 }} value={attFilter} onChange={(e) => setAttFilter(e.target.value)}>
@@ -2329,12 +2807,13 @@ export default function AdminPanel() {
               </div>
             )}
 
-            {/* Register Format Table */}
+            {/* ═══ DAILY VIEW ═══ */}
+            {attViewMode === "daily" && (
             <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
               <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", margin: 0 }}>
                   <i className="fas fa-book-open" style={{ marginRight: 8, color: "#1349A8" }} />
-                  Attendance Register — {attViewMode === "daily" ? attDate : attViewMode === "weekly" ? "This Week" : "This Month"}
+                  Attendance Register — {attDate}
                 </h3>
                 <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>
                   {attClassFilter !== "all" ? `Class ${attClassFilter}` : "All Classes"}
@@ -2357,15 +2836,14 @@ export default function AdminPanel() {
                 <tbody>
                   {(() => {
                     let stList = students.filter(x => x.status === "active");
-                    if (attClassFilter !== "all") stList = stList.filter(x => x.class === attClassFilter);
+                    if (attClassFilter !== "all") stList = filterByBatch(stList, attClassFilter);
                     if (attSearch.trim()) {
                       const q = attSearch.toLowerCase();
                       stList = stList.filter(x => x.studentName?.toLowerCase().includes(q) || x.rfidCode?.toLowerCase().includes(q));
                     }
-                    // Check batch validity for each student
                     const today = attDate;
                     stList = stList.filter(st => {
-                      if (!st.batchStartDate || !st.batchEndDate) return true; // no batch dates = show always
+                      if (!st.batchStartDate || !st.batchEndDate) return true;
                       return today >= st.batchStartDate && today <= st.batchEndDate;
                     });
 
@@ -2388,11 +2866,14 @@ export default function AdminPanel() {
                         <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
                           <td style={{ padding: "10px 14px", fontWeight: 600, color: "#6B7F99", position: "sticky", left: 0, background: idx % 2 === 0 ? "#fff" : "#FAFCFE", zIndex: 1 }}>{idx + 1}</td>
                           <td style={{ padding: "10px 14px", position: "sticky", left: 50, background: idx % 2 === 0 ? "#fff" : "#FAFCFE", zIndex: 1 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => fetchStudentCalendar(st, new Date().getFullYear(), new Date().getMonth())}>
                               <div style={{ width: 32, height: 32, borderRadius: 8, overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#1349A8,#2A6FE0)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                 {st.photo && st.photo.startsWith("http") ? <img src={st.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".7rem" }}>{st.studentName?.charAt(0)}</span>}
                               </div>
-                              <span style={{ fontWeight: 600, fontSize: ".82rem" }}>{st.studentName}</span>
+                              <div>
+                                <span style={{ fontWeight: 600, fontSize: ".82rem", color: "#1349A8", textDecoration: "underline", textDecorationStyle: "dotted" }}>{st.studentName}</span>
+                                <div style={{ fontSize: ".6rem", color: "#6B7F99" }}>Click for calendar</div>
+                              </div>
                             </div>
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
@@ -2447,7 +2928,244 @@ export default function AdminPanel() {
                 </tbody>
               </table>
             </div>
+            )}
 
+            {/* ═══ WEEKLY / MONTHLY VIEW ═══ */}
+            {(attViewMode === "weekly" || attViewMode === "monthly") && (
+            <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+              <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", margin: 0 }}>
+                  <i className="fas fa-calendar-alt" style={{ marginRight: 8, color: "#1349A8" }} />
+                  {attViewMode === "weekly" ? "Weekly" : "Monthly"} Attendance Register
+                </h3>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {multiDayLoading && <span style={{ fontSize: ".72rem", color: "#D98D04" }}><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Loading...</span>}
+                  <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>
+                    {attClassFilter !== "all" ? `Class ${attClassFilter}` : "All Classes"}
+                  </span>
+                </div>
+              </div>
+
+              {(() => {
+                const dates = attViewMode === "weekly" ? getWeekDates(attDate) : getMonthDates(new Date(attDate).getFullYear(), new Date(attDate).getMonth());
+                const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                let stList = students.filter(x => x.status === "active");
+                if (attClassFilter !== "all") stList = filterByBatch(stList, attClassFilter);
+                if (attSearch.trim()) {
+                  const q = attSearch.toLowerCase();
+                  stList = stList.filter(x => x.studentName?.toLowerCase().includes(q) || x.rfidCode?.toLowerCase().includes(q));
+                }
+                const todayStr = new Date().toISOString().split("T")[0];
+
+                return (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".72rem" }}>
+                    <thead>
+                      <tr style={{ background: "#F0F4FA" }}>
+                        <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", position: "sticky", left: 0, background: "#F0F4FA", zIndex: 2, minWidth: 40 }}>#</th>
+                        <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", position: "sticky", left: 40, background: "#F0F4FA", zIndex: 2, minWidth: 140 }}>Student</th>
+                        {dates.map(d => {
+                          const dt = new Date(d + "T00:00:00");
+                          const isHol = isHoliday(d);
+                          const isSun = dt.getDay() === 0;
+                          return (
+                            <th key={d} style={{ padding: "6px 4px", textAlign: "center", fontWeight: 600, borderBottom: "2px solid #D4DEF0", minWidth: 38, background: isHol ? "#FEF3C7" : isSun ? "#FEF2F2" : "#F0F4FA", fontSize: ".65rem" }}>
+                              <div>{String(dt.getDate()).padStart(2, "0")}</div>
+                              <div style={{ color: isSun ? "#DC2626" : "#6B7F99", fontSize: ".58rem" }}>{dayNames[dt.getDay()]}</div>
+                            </th>
+                          );
+                        })}
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 36, color: "#16A34A", background: "#F0FDF4" }}>P</th>
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 36, color: "#DC2626", background: "#FEF2F2" }}>A</th>
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 36, color: "#1349A8" }}>%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stList.length === 0 ? (
+                        <tr><td colSpan={dates.length + 5} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No active students found</td></tr>
+                      ) : stList.map((st, idx) => {
+                        let totalP = 0, totalA = 0, totalWorking = 0;
+                        return (
+                          <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8" }}>
+                            <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99", position: "sticky", left: 0, background: "#fff", zIndex: 1 }}>{idx + 1}</td>
+                            <td style={{ padding: "8px 10px", position: "sticky", left: 40, background: "#fff", zIndex: 1 }}>
+                              <div style={{ cursor: "pointer" }} onClick={() => fetchStudentCalendar(st, new Date(attDate).getFullYear(), new Date(attDate).getMonth())}>
+                                <div style={{ fontWeight: 600, fontSize: ".76rem", color: "#1349A8", textDecoration: "underline", textDecorationStyle: "dotted" }}>{st.studentName}</div>
+                                <div style={{ fontSize: ".6rem", color: "#6B7F99" }}>{st.class}</div>
+                              </div>
+                            </td>
+                            {dates.map(d => {
+                              const isHol = isHoliday(d);
+                              const isSun = new Date(d + "T00:00:00").getDay() === 0;
+                              if (isHol || isSun) {
+                                return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isHol ? "#FFFBEB" : "#FEF2F2" }}><span style={{ fontSize: ".6rem", fontWeight: 700, color: isHol ? "#D98D04" : "#FCA5A5" }}>{isHol ? "H" : "S"}</span></td>;
+                              }
+                              totalWorking++;
+                              const dayAtt = multiDayAtt.filter(a => a.studentId === st.id && a.date === d);
+                              const hasIn = dayAtt.some(a => a.type === "in");
+                              const hasAbsent = dayAtt.some(a => a.type === "absent");
+                              const isFuture = d > todayStr;
+                              if (hasIn) { totalP++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F0FDF4" }}><span style={{ color: "#16A34A", fontWeight: 800, fontSize: ".7rem" }}>P</span></td>; }
+                              if (hasAbsent || (!isFuture && !hasIn)) { if (!isFuture) totalA++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isFuture ? "#fff" : "#FEF2F2" }}><span style={{ color: isFuture ? "#B0C4DC" : "#DC2626", fontWeight: 700, fontSize: ".7rem" }}>{isFuture ? "—" : "A"}</span></td>; }
+                              return <td key={d} style={{ padding: "4px 2px", textAlign: "center" }}><span style={{ color: "#B0C4DC", fontSize: ".65rem" }}>—</span></td>;
+                            })}
+                            <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#16A34A", background: "#F0FDF4", fontSize: ".76rem" }}>{totalP}</td>
+                            <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#DC2626", background: "#FEF2F2", fontSize: ".76rem" }}>{totalA}</td>
+                            <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#1349A8", fontSize: ".76rem" }}>{totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+            </div>
+            )}
+          </>}
+
+          {/* ═══ PER-STUDENT/TEACHER CALENDAR MODAL (outside sub-tabs) ═══ */}
+          {calendarStudent && (
+              <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setCalendarStudent(null)}>
+                <div style={{ background: "#fff", borderRadius: 16, padding: 24, maxWidth: 520, width: "100%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 40px rgba(0,0,0,.2)" }} onClick={(e) => e.stopPropagation()}>
+                  {/* Header */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg,#1349A8,#2A6FE0)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                        {calendarStudent.photo && calendarStudent.photo.startsWith("http") ? <img src={calendarStudent.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700 }}>{calendarStudent.studentName?.charAt(0)}</span>}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: "1rem" }}>{calendarStudent.studentName}</div>
+                        <div style={{ fontSize: ".75rem", color: "#6B7F99" }}>Class {calendarStudent.class} · {calendarStudent.rfidCode || "No RFID"}</div>
+                      </div>
+                    </div>
+                    <button onClick={() => setCalendarStudent(null)} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", color: "#6B7F99", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <i className="fas fa-times" />
+                    </button>
+                  </div>
+
+                  {/* Month Navigation */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                    <button onClick={() => {
+                      const nm = calStudentMonth === 0 ? 11 : calStudentMonth - 1;
+                      const ny = calStudentMonth === 0 ? calStudentYear - 1 : calStudentYear;
+                      fetchStudentCalendar(calendarStudent, ny, nm);
+                    }} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", cursor: "pointer", fontSize: ".78rem", fontWeight: 600, color: "#4A5E78" }}>
+                      <i className="fas fa-chevron-left" />
+                    </button>
+                    <span style={{ fontWeight: 700, fontSize: ".92rem", color: "#0B1826" }}>
+                      {new Date(calStudentYear, calStudentMonth).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
+                    </span>
+                    <button onClick={() => {
+                      const nm = calStudentMonth === 11 ? 0 : calStudentMonth + 1;
+                      const ny = calStudentMonth === 11 ? calStudentYear + 1 : calStudentYear;
+                      fetchStudentCalendar(calendarStudent, ny, nm);
+                    }} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", cursor: "pointer", fontSize: ".78rem", fontWeight: 600, color: "#4A5E78" }}>
+                      <i className="fas fa-chevron-right" />
+                    </button>
+                  </div>
+
+                  {/* Stats Row */}
+                  {(() => {
+                    const daysInMonth = new Date(calStudentYear, calStudentMonth + 1, 0).getDate();
+                    const todayStr = new Date().toISOString().split("T")[0];
+                    let totalP = 0, totalA = 0, totalH = 0;
+                    for (let i = 1; i <= daysInMonth; i++) {
+                      const dateStr = `${calStudentYear}-${String(calStudentMonth + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
+                      if (dateStr > todayStr) continue;
+                      if (isHoliday(dateStr) || new Date(dateStr + "T00:00:00").getDay() === 0) { totalH++; continue; }
+                      const dayAtt = calMonthAtt.filter(a => a.date === dateStr);
+                      if (dayAtt.some(a => a.type === "in")) totalP++;
+                      else totalA++;
+                    }
+                    const totalWorking = totalP + totalA;
+                    return (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#F0FDF4" }}><div style={{ fontWeight: 800, color: "#16A34A", fontSize: "1.1rem" }}>{totalP}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Present</div></div>
+                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF2F2" }}><div style={{ fontWeight: 800, color: "#DC2626", fontSize: "1.1rem" }}>{totalA}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Absent</div></div>
+                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF3C7" }}><div style={{ fontWeight: 800, color: "#D98D04", fontSize: "1.1rem" }}>{totalH}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Holiday</div></div>
+                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#EFF6FF" }}><div style={{ fontWeight: 800, color: "#1349A8", fontSize: "1.1rem" }}>{totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0}%</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Attendance</div></div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Legend */}
+                  <div style={{ display: "flex", gap: 12, marginBottom: 10, fontSize: ".68rem", flexWrap: "wrap" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: "#DCFCE7", border: "1px solid #86EFAC" }} /> Present</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: "#FEE2E2", border: "1px solid #FCA5A5" }} /> Absent</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: "#FEF3C7", border: "1px solid #FDE68A" }} /> Holiday</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: "#F3E8FF", border: "1px solid #D8B4FE" }} /> Sunday</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: "#F0F4FA", border: "1px solid #D4DEF0" }} /> Future</span>
+                  </div>
+
+                  {/* Calendar Grid */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 12 }}>
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
+                      <div key={d} style={{ textAlign: "center", fontSize: ".65rem", fontWeight: 700, color: d === "Sun" ? "#DC2626" : "#6B7F99", padding: "4px 0" }}>{d}</div>
+                    ))}
+                    {(() => {
+                      const daysInMonth = new Date(calStudentYear, calStudentMonth + 1, 0).getDate();
+                      const firstDay = new Date(calStudentYear, calStudentMonth, 1).getDay();
+                      const startOffset = firstDay === 0 ? 6 : firstDay - 1; // Monday start
+                      const todayStr = new Date().toISOString().split("T")[0];
+                      const cells = [];
+
+                      // Empty cells before first day
+                      for (let i = 0; i < startOffset; i++) {
+                        cells.push(<div key={`empty-${i}`} />);
+                      }
+
+                      for (let i = 1; i <= daysInMonth; i++) {
+                        const dateStr = `${calStudentYear}-${String(calStudentMonth + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
+                        const isSun = new Date(dateStr + "T00:00:00").getDay() === 0;
+                        const isHol = isHoliday(dateStr);
+                        const isFuture = dateStr > todayStr;
+                        const isToday = dateStr === todayStr;
+                        const dayAtt = calMonthAtt.filter(a => a.date === dateStr);
+                        const hasIn = dayAtt.some(a => a.type === "in");
+                        const checkIn = dayAtt.find(a => a.type === "in");
+                        const checkOut = dayAtt.find(a => a.type === "out");
+
+                        let bg = "#F8FAFD"; let border = "1px solid #E8EFF8"; let color = "#6B7F99";
+                        if (isHol) { bg = "#FEF3C7"; border = "1px solid #FDE68A"; color = "#D98D04"; }
+                        else if (isSun) { bg = "#F3E8FF"; border = "1px solid #D8B4FE"; color = "#7C3AED"; }
+                        else if (isFuture) { bg = "#F0F4FA"; border = "1px solid #D4DEF0"; color = "#B0C4DC"; }
+                        else if (hasIn) { bg = "#DCFCE7"; border = "1px solid #86EFAC"; color = "#16A34A"; }
+                        else { bg = "#FEE2E2"; border = "1px solid #FCA5A5"; color = "#DC2626"; }
+                        if (isToday) border = "2px solid #1349A8";
+
+                        cells.push(
+                          <div key={dateStr} style={{ background: bg, border, borderRadius: 8, padding: "6px 4px", textAlign: "center", cursor: hasIn || dayAtt.length > 0 ? "pointer" : "default", minHeight: 52, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", transition: "all .15s" }}
+                            title={checkIn ? `IN: ${new Date(checkIn.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}${checkOut ? ` · OUT: ${new Date(checkOut.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}` : isHol ? holidays.find(h => h.date === dateStr)?.title || "Holiday" : isSun ? "Sunday" : isFuture ? "Upcoming" : "Absent"}>
+                            <div style={{ fontWeight: 700, fontSize: ".78rem", color }}>{i}</div>
+                            {isHol ? <div style={{ fontSize: ".52rem", fontWeight: 700, color: "#D98D04" }}>H</div>
+                              : isSun ? <div style={{ fontSize: ".52rem", fontWeight: 700, color: "#7C3AED" }}>S</div>
+                              : isFuture ? <div style={{ fontSize: ".52rem", color: "#B0C4DC" }}>—</div>
+                              : hasIn ? (
+                                <div style={{ fontSize: ".5rem", color: "#16A34A", fontWeight: 600 }}>
+                                  {checkIn ? new Date(checkIn.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "P"}
+                                </div>
+                              ) : <div style={{ fontSize: ".52rem", fontWeight: 700, color: "#DC2626" }}>A</div>
+                            }
+                            {checkOut && !isHol && !isSun && (
+                              <div style={{ fontSize: ".48rem", color: "#D98D04" }}>
+                                → {new Date(checkOut.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+                      return cells;
+                    })()}
+                  </div>
+
+                  {/* Close Button */}
+                  <div style={{ textAlign: "center" }}>
+                    <button onClick={() => setCalendarStudent(null)} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#1349A8,#2A6FE0)", color: "#fff", fontSize: ".82rem", fontWeight: 700, cursor: "pointer" }}>Close Calendar</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          {attSubTab === "students" && <>
             {/* Unknown RFID Taps */}
             {attendance.filter(a => !a.studentId).length > 0 && (
               <div style={{ ...s.card, border: "2px solid #FCA5A5" }}>
@@ -2469,88 +3187,216 @@ export default function AdminPanel() {
           {/* ═══ TEACHER ATTENDANCE SUB-TAB ═══ */}
           {attSubTab === "teachers" && <>
             <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
-              <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4" }}>
+              <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", margin: 0 }}>
                   <i className="fas fa-chalkboard-teacher" style={{ marginRight: 8, color: "#059669" }} />
-                  Teacher Attendance — {attDate}
+                  Teacher Attendance — {attViewMode === "daily" ? attDate : attViewMode === "weekly" ? "This Week" : "This Month"}
                 </h3>
+                <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>RFID + Manual</span>
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".82rem" }}>
+
+              {/* Weekly/Monthly Teacher Register */}
+              {(attViewMode === "weekly" || attViewMode === "monthly") && (() => {
+                const dates = attViewMode === "weekly" ? getWeekDates(attDate) : getMonthDates(new Date(attDate).getFullYear(), new Date(attDate).getMonth());
+                const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                const todayStr = new Date().toISOString().split("T")[0];
+                return (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".72rem" }}>
+                    <thead>
+                      <tr style={{ background: "#F0F4FA" }}>
+                        <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", position: "sticky", left: 0, background: "#F0F4FA", zIndex: 2, minWidth: 40 }}>#</th>
+                        <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", position: "sticky", left: 40, background: "#F0F4FA", zIndex: 2, minWidth: 140 }}>Teacher</th>
+                        {dates.map(d => {
+                          const dt = new Date(d + "T00:00:00");
+                          const isHol = isHoliday(d);
+                          const isSun = dt.getDay() === 0;
+                          return (
+                            <th key={d} style={{ padding: "6px 4px", textAlign: "center", fontWeight: 600, borderBottom: "2px solid #D4DEF0", minWidth: 38, background: isHol ? "#FEF3C7" : isSun ? "#FEF2F2" : "#F0F4FA", fontSize: ".65rem" }}>
+                              <div>{String(dt.getDate()).padStart(2, "0")}</div>
+                              <div style={{ color: isSun ? "#DC2626" : "#6B7F99", fontSize: ".58rem" }}>{dayNames[dt.getDay()]}</div>
+                            </th>
+                          );
+                        })}
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 36, color: "#16A34A", background: "#F0FDF4" }}>P</th>
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 36, color: "#DC2626", background: "#FEF2F2" }}>A</th>
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 36, color: "#1349A8" }}>%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {teachers.length === 0 ? (
+                        <tr><td colSpan={dates.length + 5} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No teachers found</td></tr>
+                      ) : teachers.map((t, idx) => {
+                        let totalP = 0, totalA = 0, totalWorking = 0;
+                        const personKey = `teacher_${t.id}`;
+                        return (
+                          <tr key={t.id} style={{ borderBottom: "1px solid #E8EFF8" }}>
+                            <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99", position: "sticky", left: 0, background: "#fff", zIndex: 1 }}>{idx + 1}</td>
+                            <td style={{ padding: "8px 10px", position: "sticky", left: 40, background: "#fff", zIndex: 1 }}>
+                              <div style={{ cursor: "pointer" }} onClick={() => {
+                                const teacherAsStudent = { id: personKey, studentName: t.name, class: "Teacher", rfidCode: t.rfidCode || "", photo: t.photo || "" };
+                                fetchStudentCalendar(teacherAsStudent, new Date(attDate).getFullYear(), new Date(attDate).getMonth());
+                              }}>
+                                <div style={{ fontWeight: 600, fontSize: ".76rem", color: "#059669", textDecoration: "underline", textDecorationStyle: "dotted" }}>{t.name}</div>
+                                <div style={{ fontSize: ".6rem", color: "#6B7F99" }}>{t.subject}</div>
+                              </div>
+                            </td>
+                            {dates.map(d => {
+                              const isHol = isHoliday(d);
+                              const isSun = new Date(d + "T00:00:00").getDay() === 0;
+                              if (isHol || isSun) {
+                                return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isHol ? "#FFFBEB" : "#FEF2F2" }}><span style={{ fontSize: ".6rem", fontWeight: 700, color: isHol ? "#D98D04" : "#FCA5A5" }}>{isHol ? "H" : "S"}</span></td>;
+                              }
+                              totalWorking++;
+                              const dayAtt = multiDayAtt.filter(a => (a.studentId === personKey || a.rfidCode === (t.rfidCode || `TEACHER_${t.id}`)) && a.date === d);
+                              const hasIn = dayAtt.some(a => a.type === "in");
+                              const hasAbsent = dayAtt.some(a => a.type === "absent");
+                              const isFuture = d > todayStr;
+                              if (hasIn) { totalP++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F0FDF4" }}><span style={{ color: "#16A34A", fontWeight: 800, fontSize: ".7rem" }}>P</span></td>; }
+                              if (hasAbsent || (!isFuture && !hasIn)) { if (!isFuture) totalA++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isFuture ? "#fff" : "#FEF2F2" }}><span style={{ color: isFuture ? "#B0C4DC" : "#DC2626", fontWeight: 700, fontSize: ".7rem" }}>{isFuture ? "—" : "A"}</span></td>; }
+                              return <td key={d} style={{ padding: "4px 2px", textAlign: "center" }}><span style={{ color: "#B0C4DC", fontSize: ".65rem" }}>—</span></td>;
+                            })}
+                            <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#16A34A", background: "#F0FDF4", fontSize: ".76rem" }}>{totalP}</td>
+                            <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#DC2626", background: "#FEF2F2", fontSize: ".76rem" }}>{totalA}</td>
+                            <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#1349A8", fontSize: ".76rem" }}>{totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+
+              {/* Daily Teacher Table */}
+              {attViewMode === "daily" && <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".82rem" }}>
                 <thead>
                   <tr style={{ background: "#F0F4FA" }}>
                     <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
                     <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Teacher Name</th>
                     <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Subject</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>RFID</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A", borderBottom: "2px solid #D4DEF0" }}>Check-IN</th>
+                    <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#D98D04", borderBottom: "2px solid #D4DEF0" }}>Check-OUT</th>
                     <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
                     <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {teachers.length > 0 ? teachers.map((t, idx) => {
-                    const tAtt = attendance.filter(a => a.rfidCode === `TEACHER_${t.id}` || (a.studentId === `teacher_${t.id}`));
-                    const tPresent = tAtt.length > 0;
+                  {teachers.length > 0 ? teachers.filter(t => {
+                    // ═══ Filter teachers whose card validity has expired ═══
+                    if (!t.cardValidFrom || !t.cardValidTo) return true; // validity nahi set = show karo
+                    const today = new Date().toISOString().split("T")[0];
+                    return today >= t.cardValidFrom && today <= t.cardValidTo;
+                  }).map((t, idx) => {
+                    // Match by RFID code OR by teacher_ prefix ID
+                    const tAtt = attendance.filter(a => (t.rfidCode && a.rfidCode === t.rfidCode) || a.rfidCode === `TEACHER_${t.id}` || a.studentId === `teacher_${t.id}`);
+                    const checkIn = tAtt.find(a => a.type === "in");
+                    const checkOut = tAtt.find(a => a.type === "out");
+                    const isAbsentManual = tAtt.find(a => a.type === "absent");
+                    const tPresent = !!checkIn;
                     const isHol = isHoliday(attDate);
                     return (
                       <tr key={t.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
                         <td style={{ padding: "10px 14px", fontWeight: 600, color: "#6B7F99" }}>{idx + 1}</td>
                         <td style={{ padding: "10px 14px" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => {
+                            // Open teacher calendar — reuse student calendar with teacher data
+                            const teacherAsStudent = { id: `teacher_${t.id}`, studentName: t.name, class: "Teacher", rfidCode: t.rfidCode || "", photo: t.photo || "" };
+                            fetchStudentCalendar(teacherAsStudent, new Date().getFullYear(), new Date().getMonth());
+                          }}>
                             <div style={{ width: 32, height: 32, borderRadius: 8, overflow: "hidden", background: "linear-gradient(135deg,#059669,#34D399)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                               {t.photo && t.photo.startsWith("http") ? <img src={t.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".7rem" }}>{t.name?.charAt(0)}</span>}
                             </div>
                             <div>
-                              <div style={{ fontWeight: 600 }}>{t.name}</div>
+                              <div style={{ fontWeight: 600, color: "#059669", textDecoration: "underline", textDecorationStyle: "dotted" }}>{t.name}</div>
                               {t.isDirector && <span style={{ fontSize: ".62rem", color: "#D98D04", fontWeight: 700 }}>DIRECTOR</span>}
+                              {!t.isDirector && <div style={{ fontSize: ".6rem", color: "#6B7F99" }}>Click for calendar</div>}
                             </div>
                           </div>
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}><span style={s.badge("#7C3AED", "#FAF5FF")}>{t.subject}</span></td>
+                        <td style={{ padding: "10px 14px", textAlign: "center", fontFamily: "monospace", fontSize: ".72rem", color: t.rfidCode ? "#7C3AED" : "#DC2626" }}>{t.rfidCode || "No RFID"}</td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {checkIn ? (
+                            <div>
+                              <span style={{ color: "#16A34A", fontWeight: 700, fontSize: ".78rem" }}>
+                                {new Date(checkIn.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                              {checkIn.manual && <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>Manual</div>}
+                            </div>
+                          ) : <span style={{ color: "#B0C4DC" }}>—</span>}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {checkOut ? (
+                            <div>
+                              <span style={{ color: "#D98D04", fontWeight: 700, fontSize: ".78rem" }}>
+                                {new Date(checkOut.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                              {checkOut.manual && <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>Manual</div>}
+                            </div>
+                          ) : <span style={{ color: "#B0C4DC" }}>—</span>}
+                        </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
                           {isHol ? <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>
-                            : tPresent ? <span style={s.badge("#16A34A", "#F0FDF4")}>Present</span>
+                            : tPresent ? <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>
+                            : isAbsentManual ? <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>
                             : <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>}
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                          {!tPresent && !isHol && (
+                          {!tPresent && !isAbsentManual && !isHol && (
                             <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
                               <button onClick={async () => {
                                 try {
                                   await addDoc(collection(db, "attendance"), {
-                                    rfidCode: `TEACHER_${t.id}`, type: "in", studentId: `teacher_${t.id}`,
+                                    rfidCode: t.rfidCode || `TEACHER_${t.id}`, type: "in", studentId: `teacher_${t.id}`,
                                     studentName: t.name, studentClass: "Teacher", studentPhoto: t.photo || "",
                                     deviceId: "manual-admin", date: attDate, timestamp: new Date().toISOString(),
                                     manual: true, isTeacher: true, markedBy: user?.email, createdAt: serverTimestamp(),
                                   });
                                   showMsg(`${t.name} marked Present`);
                                 } catch (e) { showMsg("Error: " + e.message); }
-                              }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
-                                <i className="fas fa-check" style={{ marginRight: 3 }} />Present
+                              }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }}>
+                                <i className="fas fa-check" style={{ marginRight: 3 }} />P
                               </button>
                               <button onClick={async () => {
                                 try {
                                   await addDoc(collection(db, "attendance"), {
-                                    rfidCode: `TEACHER_${t.id}`, type: "absent", studentId: `teacher_${t.id}`,
+                                    rfidCode: t.rfidCode || `TEACHER_${t.id}`, type: "absent", studentId: `teacher_${t.id}`,
                                     studentName: t.name, studentClass: "Teacher", studentPhoto: t.photo || "",
                                     deviceId: "manual-admin", date: attDate, timestamp: new Date().toISOString(),
                                     manual: true, isTeacher: true, markedBy: user?.email, createdAt: serverTimestamp(),
                                   });
                                   showMsg(`${t.name} marked Absent`);
                                 } catch (e) { showMsg("Error: " + e.message); }
-                              }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
-                                <i className="fas fa-times" style={{ marginRight: 3 }} />Absent
+                              }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }}>
+                                <i className="fas fa-times" style={{ marginRight: 3 }} />A
                               </button>
                             </div>
+                          )}
+                          {tPresent && !checkOut && (
+                            <button onClick={async () => {
+                              try {
+                                await addDoc(collection(db, "attendance"), {
+                                  rfidCode: t.rfidCode || `TEACHER_${t.id}`, type: "out", studentId: `teacher_${t.id}`,
+                                  studentName: t.name, studentClass: "Teacher", studentPhoto: t.photo || "",
+                                  deviceId: "manual-admin", date: attDate, timestamp: new Date().toISOString(),
+                                  manual: true, isTeacher: true, markedBy: user?.email, createdAt: serverTimestamp(),
+                                });
+                                showMsg(`${t.name} Check-OUT marked`);
+                              } catch (e) { showMsg("Error: " + e.message); }
+                            }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }}>
+                              <i className="fas fa-sign-out-alt" style={{ marginRight: 3 }} />OUT
+                            </button>
                           )}
                         </td>
                       </tr>
                     );
                   }) : (
-                    <tr><td colSpan={5} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>
+                    <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>
                       Teachers tab me pehle teachers add karo
                     </td></tr>
                   )}
                 </tbody>
-              </table>
+              </table>}
             </div>
           </>}
 
@@ -2564,6 +3410,465 @@ export default function AdminPanel() {
               • Holiday add karo Holidays tab se — holiday ke din absent nahi lagega<br />
               • Batch expired students automatically hide ho jayenge register se<br />
               • Teacher attendance bhi daily track karo
+            </div>
+          </div>
+        </>}
+
+        {/* ═══════════ RECORDS TAB (Attendance + Students + Teachers + Fees) ═══════════ */}
+        {tab === "records" && <>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-archive" style={{ marginRight: 8, color: "#7C3AED" }} />Records</h2>
+              <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Permanent archive — Attendance, Students, Teachers & Fee Records</p>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {recMainTab === "attendance" && <button onClick={exportRecordsExcel} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#059669", fontSize: ".78rem", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}><i className="fas fa-file-excel" /> Export A4 Excel</button>}
+            </div>
+          </div>
+
+          {/* ═══ BATCH / SESSION YEAR HEADING ═══ */}
+          <div style={{ background: "linear-gradient(135deg, #1E1B4B, #312E81)", borderRadius: 14, padding: "18px 24px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: "rgba(255,255,255,.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <i className="fas fa-graduation-cap" style={{ color: "#F5AC10", fontSize: "1.3rem" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "#fff", letterSpacing: ".5px" }}>
+                  Batch {recBatchYear}-{String(recBatchYear + 1).slice(2)}
+                </div>
+                <div style={{ fontSize: ".74rem", color: "rgba(255,255,255,.6)", marginTop: 2 }}>
+                  Session: April {recBatchYear} — March {recBatchYear + 1} · {recBatchYear === getCurrentBatchYear() ? "Current Session" : "Previous Session"}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {recBatchYear !== getCurrentBatchYear() && (
+                <button onClick={() => { setRecBatchYear(getCurrentBatchYear()); setRecWeekOffset(0); }} style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid rgba(255,255,255,.25)", background: "rgba(255,255,255,.1)", color: "#fff", fontSize: ".78rem", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                  <i className="fas fa-arrow-left" />Current Batch
+                </button>
+              )}
+              <button onClick={() => setRecShowHistory(!recShowHistory)} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: recShowHistory ? "#F5AC10" : "rgba(255,255,255,.15)", color: recShowHistory ? "#1E1B4B" : "#F5AC10", fontSize: ".78rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                <i className={`fas ${recShowHistory ? "fa-times" : "fa-history"}`} />
+                {recShowHistory ? "Close" : "Previous Years"}
+              </button>
+            </div>
+          </div>
+
+          {/* ═══ PREVIOUS YEARS HISTORY PANEL ═══ */}
+          {recShowHistory && (
+            <div style={{ background: "#fff", borderRadius: 12, border: "2px solid #E9D5FF", padding: 20, marginBottom: 16 }}>
+              <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#1E1B4B", marginBottom: 14 }}><i className="fas fa-folder-open" style={{ marginRight: 8, color: "#7C3AED" }} />Select Batch / Session Year</h3>
+              <p style={{ fontSize: ".76rem", color: "#6B7F99", marginBottom: 14 }}>Kisi bhi purane batch ka record dekhne ke liye year select karo. Data permanently saved hai — chahe RFID expire ho.</p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {(() => {
+                  const cy = getCurrentBatchYear();
+                  const years = [];
+                  for (let y = cy; y >= cy - 5; y--) years.push(y);
+                  return years.map(y => (
+                    <button key={y} onClick={() => { setRecBatchYear(y); setRecWeekOffset(0); setRecShowHistory(false); if (y !== cy) { const diff = Math.floor((new Date() - new Date(y, 3, 1)) / (1000*60*60*24*7)); setRecWeekOffset(-diff); } }} style={{ padding: "12px 20px", borderRadius: 10, border: recBatchYear === y ? "2px solid #7C3AED" : "1px solid #D4DEF0", background: recBatchYear === y ? "#FAF5FF" : y === cy ? "#F0FDF4" : "#F8FAFD", color: recBatchYear === y ? "#7C3AED" : "#1C2E44", fontSize: ".85rem", fontWeight: 700, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 100 }}>
+                      <i className={`fas ${y === cy ? "fa-star" : "fa-folder"}`} style={{ color: y === cy ? "#16A34A" : "#6B7F99", fontSize: ".9rem" }} />
+                      <span>{y}-{String(y + 1).slice(2)}</span>
+                      <span style={{ fontSize: ".62rem", color: "#6B7F99", fontWeight: 500 }}>{y === cy ? "Current" : `Apr ${y} - Mar ${y+1}`}</span>
+                    </button>
+                  ));
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* ═══ MAIN TABS: Attendance | Students | Teachers | Fees ═══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 16 }}>
+            {[
+              { id: "attendance", icon: "fa-clipboard-list", label: "Attendance Record", color: "#1349A8" },
+              { id: "students", icon: "fa-user-graduate", label: "Students Record", color: "#059669" },
+              { id: "teachers", icon: "fa-chalkboard-teacher", label: "Teacher Records", color: "#7C3AED" },
+              { id: "fees", icon: "fa-rupee-sign", label: "Fee Record", color: "#D98D04" },
+            ].map(t => (
+              <button key={t.id} onClick={() => { setRecMainTab(t.id); setRecClassFilter("all"); }} style={{
+                padding: "14px 10px", borderRadius: 10, border: recMainTab === t.id ? `2px solid ${t.color}` : "1px solid #D4DEF0",
+                background: recMainTab === t.id ? "#fff" : "#F8FAFD",
+                color: recMainTab === t.id ? t.color : "#6B7F99",
+                fontSize: ".78rem", fontWeight: 700, cursor: "pointer",
+                boxShadow: recMainTab === t.id ? `0 4px 12px ${t.color}22` : "none",
+                transition: "all .2s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6
+              }}>
+                <i className={`fas ${t.icon}`} style={{ fontSize: "1.1rem" }} />{t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* ═══ CLASS FILTER (Board + Medium wise — matching image) ═══ */}
+          {(recMainTab === "attendance" || recMainTab === "students" || recMainTab === "fees") && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: ".78rem", fontWeight: 700, color: "#1C2E44", marginBottom: 8 }}><i className="fas fa-filter" style={{ marginRight: 6, color: "#7C3AED" }} />Filter by Class / Medium / Board:</div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                <button onClick={() => setRecClassFilter("all")} style={{ padding: "7px 14px", borderRadius: 8, border: recClassFilter === "all" ? "2px solid #1349A8" : "1px solid #D4DEF0", background: recClassFilter === "all" ? "#EFF6FF" : "#fff", color: recClassFilter === "all" ? "#1349A8" : "#6B7F99", fontSize: ".72rem", fontWeight: 700, cursor: "pointer" }}>All</button>
+                {CLASS_CATEGORIES.map(cat => {
+                  const count = filterByBatch(students, cat.id).length;
+                  return (
+                    <button key={cat.id} onClick={() => setRecClassFilter(cat.id)} style={{
+                      padding: "7px 12px", borderRadius: 8,
+                      border: recClassFilter === cat.id ? `2px solid ${cat.color}` : "1px solid #D4DEF0",
+                      background: recClassFilter === cat.id ? `${cat.color}15` : "#fff",
+                      color: recClassFilter === cat.id ? cat.color : "#4A5E78",
+                      fontSize: ".68rem", fontWeight: 600, cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap"
+                    }}>
+                      <i className={`fas ${cat.icon}`} style={{ fontSize: ".6rem" }} />
+                      {cat.shortLabel}
+                      <span style={{ background: recClassFilter === cat.id ? cat.color : "#E8EFF8", color: recClassFilter === cat.id ? "#fff" : "#6B7F99", padding: "1px 6px", borderRadius: 10, fontSize: ".58rem", fontWeight: 700 }}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* ═══ ATTENDANCE RECORD SUB-TAB ═══ */}
+          {/* ═══════════════════════════════════════════ */}
+          {recMainTab === "attendance" && <>
+            {/* Week Navigation */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, background: "#fff", borderRadius: 12, border: "1px solid #D4DEF0", padding: "12px 18px" }}>
+              <button onClick={() => setRecWeekOffset(recWeekOffset - 1)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", cursor: "pointer", fontSize: ".82rem", fontWeight: 600, color: "#4A5E78" }}>
+                <i className="fas fa-chevron-left" style={{ marginRight: 6 }} />Prev Week
+              </button>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontWeight: 700, fontSize: ".92rem", color: "#0B1826" }}>{getArWeekLabel(recWeekOffset)}</div>
+                <div style={{ fontSize: ".68rem", color: "#6B7F99" }}>{recWeekOffset === 0 ? "Current Week" : recWeekOffset === -1 ? "Last Week" : `${Math.abs(recWeekOffset)} weeks ${recWeekOffset < 0 ? "ago" : "ahead"}`}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setRecWeekOffset(0)} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #D4DEF0", background: recWeekOffset === 0 ? "#EFF6FF" : "#F8FAFD", cursor: "pointer", fontSize: ".72rem", fontWeight: 600, color: "#1349A8" }}>This Week</button>
+                <button onClick={() => setRecWeekOffset(recWeekOffset + 1)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", cursor: "pointer", fontSize: ".82rem", fontWeight: 600, color: "#4A5E78" }}>
+                  Next Week<i className="fas fa-chevron-right" style={{ marginLeft: 6 }} />
+                </button>
+              </div>
+            </div>
+
+            {/* Loading */}
+            {recLoading && <div style={{ textAlign: "center", padding: 30, color: "#6B7F99" }}><i className="fas fa-spinner fa-spin" style={{ fontSize: "1.5rem", marginBottom: 8 }} /><p style={{ fontSize: ".82rem" }}>Loading records...</p></div>}
+
+            {/* Attendance Register Table */}
+            {!recLoading && (() => {
+              const dates = getArWeekDates(recWeekOffset);
+              const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+              const todayStr = new Date().toISOString().split("T")[0];
+              let personList = [];
+
+              if (recClassFilter === "all") {
+                // Sabhi students (all classes) + teachers
+                personList = [
+                  ...teachers.map(t => ({ id: `teacher_${t.id}`, name: t.name, classLabel: "Teacher", detail: t.subject || "", rfidCode: t.rfidCode || "", photo: t.photo || "", batchStart: t.cardValidFrom || "", batchEnd: t.cardValidTo || "", isExpired: t.cardValidTo ? todayStr > t.cardValidTo : false, isTeacher: true })),
+                  ...students.map(st => ({ id: st.id, name: st.studentName, classLabel: st.class || "N/A", detail: `${st.medium || ""} · ${st.board || ""}`, rfidCode: st.rfidCode || "", photo: st.photo || "", batchStart: st.batchStartDate || "", batchEnd: st.batchEndDate || "", isExpired: st.batchEndDate ? todayStr > st.batchEndDate : false, isTeacher: false })),
+                ];
+              } else {
+                // Specific class filter
+                const filtered = filterByBatch(students, recClassFilter);
+                personList = filtered.map(st => ({ id: st.id, name: st.studentName, classLabel: st.class || "N/A", detail: `${st.medium || ""} · ${st.board || ""}`, rfidCode: st.rfidCode || "", photo: st.photo || "", batchStart: st.batchStartDate || "", batchEnd: st.batchEndDate || "", isExpired: st.batchEndDate ? todayStr > st.batchEndDate : false, isTeacher: false }));
+              }
+
+              personList.sort((a, b) => { if (a.isExpired && !b.isExpired) return 1; if (!a.isExpired && b.isExpired) return -1; return (a.name || "").localeCompare(b.name || ""); });
+
+              const activeCount = personList.filter(p => !p.isExpired).length;
+              const expiredCount = personList.filter(p => p.isExpired).length;
+              const catLabel = recClassFilter === "all" ? "All" : (CLASS_CATEGORIES.find(c => c.id === recClassFilter)?.label || recClassFilter);
+
+              return <>
+                <div style={{ display: "flex", gap: 12, marginBottom: 12, fontSize: ".78rem", color: "#6B7F99", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700, color: "#1C2E44" }}>{catLabel}</span>
+                  <span><i className="fas fa-users" style={{ marginRight: 4, color: "#1349A8" }} />{personList.length} Total</span>
+                  <span><i className="fas fa-check-circle" style={{ marginRight: 4, color: "#16A34A" }} />{activeCount} Active</span>
+                  {expiredCount > 0 && <span><i className="fas fa-times-circle" style={{ marginRight: 4, color: "#DC2626" }} />{expiredCount} Expired</span>}
+                </div>
+
+                <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+                  <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <h3 style={{ fontSize: ".92rem", fontWeight: 700, color: "#0B1826", margin: 0 }}>
+                      <i className="fas fa-table" style={{ marginRight: 8, color: "#7C3AED" }} />
+                      Attendance Record — Batch {recBatchYear}-{String(recBatchYear + 1).slice(2)} — {catLabel}
+                    </h3>
+                  </div>
+
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".72rem" }}>
+                    <thead>
+                      <tr style={{ background: "#F0F4FA" }}>
+                        <th style={{ padding: "8px 8px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", position: "sticky", left: 0, background: "#F0F4FA", zIndex: 2, minWidth: 32 }}>#</th>
+                        <th style={{ padding: "8px 8px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", position: "sticky", left: 32, background: "#F0F4FA", zIndex: 2, minWidth: 140 }}>Name</th>
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 50, fontSize: ".65rem" }}>Class</th>
+                        <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 80, fontSize: ".62rem" }}>Medium/Board</th>
+                        {dates.map(d => {
+                          const dt = new Date(d + "T00:00:00");
+                          const isHol = isHoliday(d);
+                          const isSun = dt.getDay() === 0;
+                          return (
+                            <th key={d} style={{ padding: "6px 3px", textAlign: "center", fontWeight: 600, borderBottom: "2px solid #D4DEF0", minWidth: 34, background: isHol ? "#FEF3C7" : isSun ? "#FEF2F2" : "#F0F4FA", fontSize: ".63rem" }}>
+                              <div>{String(dt.getDate()).padStart(2, "0")}</div>
+                              <div style={{ color: isSun ? "#DC2626" : "#6B7F99", fontSize: ".55rem" }}>{dayNames[dt.getDay()]}</div>
+                            </th>
+                          );
+                        })}
+                        <th style={{ padding: "8px 4px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 28, color: "#16A34A", background: "#F0FDF4", fontSize: ".65rem" }}>P</th>
+                        <th style={{ padding: "8px 4px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 28, color: "#DC2626", background: "#FEF2F2", fontSize: ".65rem" }}>A</th>
+                        <th style={{ padding: "8px 4px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 32, color: "#1349A8", fontSize: ".65rem" }}>%</th>
+                        <th style={{ padding: "8px 4px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 50, fontSize: ".62rem" }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {personList.length === 0 ? (
+                        <tr><td colSpan={dates.length + 8} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}><i className="fas fa-folder-open" style={{ fontSize: "2rem", color: "#B0C4DC", display: "block", marginBottom: 8 }} />Is category me koi record nahi mila</td></tr>
+                      ) : personList.map((p, idx) => {
+                        let totalP = 0, totalA = 0, totalWorking = 0;
+                        const bgColor = p.isExpired ? "#FFF5F5" : idx % 2 === 0 ? "#fff" : "#FAFCFE";
+                        return (
+                          <tr key={p.id} style={{ borderBottom: "1px solid #E8EFF8", background: bgColor }}>
+                            <td style={{ padding: "7px 8px", fontWeight: 600, color: "#6B7F99", position: "sticky", left: 0, background: bgColor, zIndex: 1, fontSize: ".7rem" }}>{idx + 1}</td>
+                            <td style={{ padding: "7px 8px", position: "sticky", left: 32, background: bgColor, zIndex: 1 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }} onClick={() => {
+                                const calP = { id: p.id, studentName: p.name, class: p.classLabel, rfidCode: p.rfidCode, photo: p.photo };
+                                fetchStudentCalendar(calP, new Date().getFullYear(), new Date().getMonth());
+                              }}>
+                                <div style={{ width: 24, height: 24, borderRadius: 5, overflow: "hidden", flexShrink: 0, background: p.isTeacher ? "linear-gradient(135deg,#059669,#34D399)" : "linear-gradient(135deg,#1349A8,#2A6FE0)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                  {p.photo && p.photo.startsWith("http") ? <img src={p.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".5rem" }}>{p.name?.charAt(0)}</span>}
+                                </div>
+                                <span style={{ fontWeight: 600, fontSize: ".72rem", color: p.isExpired ? "#DC2626" : p.isTeacher ? "#059669" : "#1349A8", textDecoration: "underline", textDecorationStyle: "dotted" }}>{p.name}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: "4px 4px", textAlign: "center" }}><span style={s.badge(p.isTeacher ? "#059669" : "#1349A8", p.isTeacher ? "#F0FDF4" : "#EFF6FF")}>{p.classLabel}</span></td>
+                            <td style={{ padding: "4px 4px", textAlign: "center", fontSize: ".6rem", color: "#6B7F99" }}>{p.detail || "—"}</td>
+                            {dates.map(d => {
+                              const isHol = isHoliday(d);
+                              const isSun = new Date(d + "T00:00:00").getDay() === 0;
+                              if (isHol || isSun) return <td key={d} style={{ padding: "3px 2px", textAlign: "center", background: isHol ? "#FFFBEB" : "#FEF2F2" }}><span style={{ fontSize: ".58rem", fontWeight: 700, color: isHol ? "#D98D04" : "#FCA5A5" }}>{isHol ? "H" : "S"}</span></td>;
+                              totalWorking++;
+                              const dayAtt = recData.filter(a => a.studentId === p.id && a.date === d);
+                              const hasIn = dayAtt.some(a => a.type === "in");
+                              const isFuture = d > todayStr;
+                              if (hasIn) { totalP++; return <td key={d} style={{ padding: "3px 2px", textAlign: "center", background: "#F0FDF4" }}><span style={{ color: "#16A34A", fontWeight: 800, fontSize: ".68rem" }}>P</span></td>; }
+                              if (!isFuture) { totalA++; return <td key={d} style={{ padding: "3px 2px", textAlign: "center", background: "#FEF2F2" }}><span style={{ color: "#DC2626", fontWeight: 700, fontSize: ".68rem" }}>A</span></td>; }
+                              return <td key={d} style={{ padding: "3px 2px", textAlign: "center" }}><span style={{ color: "#B0C4DC", fontSize: ".6rem" }}>—</span></td>;
+                            })}
+                            <td style={{ padding: "4px 3px", textAlign: "center", fontWeight: 800, color: "#16A34A", background: "#F0FDF4", fontSize: ".72rem" }}>{totalP}</td>
+                            <td style={{ padding: "4px 3px", textAlign: "center", fontWeight: 800, color: "#DC2626", background: "#FEF2F2", fontSize: ".72rem" }}>{totalA}</td>
+                            <td style={{ padding: "4px 3px", textAlign: "center", fontWeight: 800, color: "#1349A8", fontSize: ".72rem" }}>{totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0}%</td>
+                            <td style={{ padding: "4px 3px", textAlign: "center" }}>{p.isExpired ? <span style={s.badge("#DC2626", "#FEF2F2")}>Exp</span> : <span style={s.badge("#16A34A", "#F0FDF4")}>Act</span>}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {expiredCount > 0 && (
+                  <div style={{ background: "#FEF2F2", borderRadius: 10, padding: 12, border: "1px solid #FCA5A5", marginTop: 10, fontSize: ".76rem", color: "#991B1B", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <i className="fas fa-info-circle" style={{ marginTop: 2, flexShrink: 0 }} />
+                    <span><strong>{expiredCount} Expired records</strong> — Pink background me dikhenge. Ye data permanently saved hai. Attendance tab se hata diye gaye hain par yahan hamesha dikhenge.</span>
+                  </div>
+                )}
+              </>;
+            })()}
+          </>}
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* ═══ STUDENTS RECORD SUB-TAB ═══ */}
+          {/* ═══════════════════════════════════════════ */}
+          {recMainTab === "students" && (() => {
+            let stList = [...students];
+            if (recClassFilter !== "all") stList = filterByBatch(stList, recClassFilter);
+            stList.sort((a, b) => (a.studentName || "").localeCompare(b.studentName || ""));
+            const catLabel = recClassFilter === "all" ? "All Students" : (CLASS_CATEGORIES.find(c => c.id === recClassFilter)?.label || recClassFilter);
+
+            return <>
+              <div style={{ ...s.card, marginBottom: 0 }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", marginBottom: 14 }}><i className="fas fa-user-graduate" style={{ marginRight: 8, color: "#059669" }} />Students Record — Batch {recBatchYear}-{String(recBatchYear + 1).slice(2)} — {catLabel} ({stList.length})</h3>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem" }}>
+                  <thead>
+                    <tr style={{ background: "#F0F4FA" }}>
+                      <th style={{ padding: "10px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                      <th style={{ padding: "10px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Student Name</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Class</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Medium</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Board</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>RFID</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Batch Period</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Father</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Phone</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stList.length === 0 ? (
+                      <tr><td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No students in this category</td></tr>
+                    ) : stList.map((st, idx) => {
+                      const today = new Date().toISOString().split("T")[0];
+                      const isExp = st.batchEndDate ? today > st.batchEndDate : false;
+                      return (
+                        <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: isExp ? "#FFF5F5" : idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                          <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99" }}>{idx + 1}</td>
+                          <td style={{ padding: "8px 10px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ width: 28, height: 28, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#1349A8,#2A6FE0)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                {st.photo && st.photo.startsWith("http") ? <img src={st.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".55rem" }}>{st.studentName?.charAt(0)}</span>}
+                              </div>
+                              <span style={{ fontWeight: 600, color: isExp ? "#DC2626" : "#0B1826" }}>{st.studentName}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: "8px 6px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.medium || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.board || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontFamily: "monospace", fontSize: ".68rem", color: st.rfidCode ? "#7C3AED" : "#B0C4DC" }}>{st.rfidCode || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".68rem", color: "#6B7F99" }}>{st.batchStartDate && st.batchEndDate ? `${st.batchStartDate} → ${st.batchEndDate}` : "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.fatherName || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.studentPhone || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center" }}>{isExp ? <span style={s.badge("#DC2626", "#FEF2F2")}>Expired</span> : st.status === "active" ? <span style={s.badge("#16A34A", "#F0FDF4")}>Active</span> : <span style={s.badge("#6B7F99", "#F0F4FA")}>Inactive</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>;
+          })()}
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* ═══ TEACHER RECORDS SUB-TAB ═══ */}
+          {/* ═══════════════════════════════════════════ */}
+          {recMainTab === "teachers" && (
+            <div style={{ ...s.card, marginBottom: 0 }}>
+              <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", marginBottom: 14 }}><i className="fas fa-chalkboard-teacher" style={{ marginRight: 8, color: "#7C3AED" }} />Teacher Records — Batch {recBatchYear}-{String(recBatchYear + 1).slice(2)} ({teachers.length})</h3>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem" }}>
+                <thead>
+                  <tr style={{ background: "#F0F4FA" }}>
+                    <th style={{ padding: "10px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                    <th style={{ padding: "10px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Teacher Name</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Subject</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Qualification</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Experience</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Classes</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>RFID</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Card Validity</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Phone</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teachers.length === 0 ? (
+                    <tr><td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No teachers found</td></tr>
+                  ) : teachers.map((t, idx) => {
+                    const today = new Date().toISOString().split("T")[0];
+                    const isExp = t.cardValidTo ? today > t.cardValidTo : false;
+                    return (
+                      <tr key={t.id} style={{ borderBottom: "1px solid #E8EFF8", background: isExp ? "#FFF5F5" : idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                        <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99" }}>{idx + 1}</td>
+                        <td style={{ padding: "8px 10px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <div style={{ width: 28, height: 28, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#059669,#34D399)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              {t.photo && t.photo.startsWith("http") ? <img src={t.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: ".55rem" }}>{t.name?.charAt(0)}</span>}
+                            </div>
+                            <div>
+                              <span style={{ fontWeight: 600, color: isExp ? "#DC2626" : "#0B1826" }}>{t.name}</span>
+                              {t.isDirector && <span style={{ fontSize: ".58rem", color: "#D98D04", fontWeight: 700, marginLeft: 6 }}>DIRECTOR</span>}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: "8px 6px", textAlign: "center" }}><span style={s.badge("#7C3AED", "#FAF5FF")}>{t.subject}</span></td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.qualification || "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.experience || "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.classes || "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontFamily: "monospace", fontSize: ".68rem", color: t.rfidCode ? "#7C3AED" : "#B0C4DC" }}>{t.rfidCode || "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".68rem", color: "#6B7F99" }}>{t.cardValidFrom && t.cardValidTo ? `${t.cardValidFrom} → ${t.cardValidTo}` : "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.phone || "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center" }}>{isExp ? <span style={s.badge("#DC2626", "#FEF2F2")}>Expired</span> : <span style={s.badge("#16A34A", "#F0FDF4")}>Active</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* ═══ FEE RECORD SUB-TAB ═══ */}
+          {/* ═══════════════════════════════════════════ */}
+          {recMainTab === "fees" && (() => {
+            let stList = [...students];
+            if (recClassFilter !== "all") stList = filterByBatch(stList, recClassFilter);
+            stList.sort((a, b) => (a.studentName || "").localeCompare(b.studentName || ""));
+            const catLabel = recClassFilter === "all" ? "All Students" : (CLASS_CATEGORIES.find(c => c.id === recClassFilter)?.label || recClassFilter);
+            const totalFees = stList.reduce((s, st) => s + Number(st.totalFee || 0), 0);
+            const totalPaid = stList.reduce((s, st) => s + Number(st.enrollmentFeePaid || 0), 0);
+            const totalDue = totalFees - totalPaid;
+
+            return <>
+              {/* Fee Stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+                {[
+                  { n: `₹${totalFees.toLocaleString("en-IN")}`, l: "Total Fees", c: "#1349A8", icon: "fa-money-bill-wave" },
+                  { n: `₹${totalPaid.toLocaleString("en-IN")}`, l: "Collected", c: "#16A34A", icon: "fa-check-circle" },
+                  { n: `₹${Math.max(0, totalDue).toLocaleString("en-IN")}`, l: "Due", c: "#DC2626", icon: "fa-exclamation-circle" },
+                  { n: stList.filter(st => st.totalFee && Number(st.enrollmentFeePaid || 0) >= Number(st.totalFee)).length, l: "Fully Paid", c: "#059669", icon: "fa-user-check" },
+                ].map((x, i) => (
+                  <div key={i} style={s.stat}><i className={`fas ${x.icon}`} style={{ fontSize: "1rem", color: x.c, marginBottom: 4 }} /><div style={{ fontSize: "1.2rem", fontWeight: 800, color: x.c }}>{x.n}</div><div style={{ fontSize: ".7rem", color: "#6B7F99" }}>{x.l}</div></div>
+                ))}
+              </div>
+
+              <div style={{ ...s.card, marginBottom: 0 }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", marginBottom: 14 }}><i className="fas fa-rupee-sign" style={{ marginRight: 8, color: "#D98D04" }} />Fee Record — Batch {recBatchYear}-{String(recBatchYear + 1).slice(2)} — {catLabel} ({stList.length})</h3>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem" }}>
+                  <thead>
+                    <tr style={{ background: "#F0F4FA" }}>
+                      <th style={{ padding: "10px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                      <th style={{ padding: "10px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Student Name</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Class</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Medium</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Board</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Total Fee</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Paid</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Due</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Batch</th>
+                      <th style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stList.length === 0 ? (
+                      <tr><td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No students found</td></tr>
+                    ) : stList.map((st, idx) => {
+                      const due = Math.max(0, Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0));
+                      const fullyPaid = st.totalFee && due === 0;
+                      const today = new Date().toISOString().split("T")[0];
+                      const isExp = st.batchEndDate ? today > st.batchEndDate : false;
+                      return (
+                        <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: isExp ? "#FFF5F5" : idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                          <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99" }}>{idx + 1}</td>
+                          <td style={{ padding: "8px 10px", fontWeight: 600, color: isExp ? "#DC2626" : "#0B1826" }}>{st.studentName}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.medium || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.board || "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#1349A8" }}>{st.totalFee ? `₹${Number(st.totalFee).toLocaleString("en-IN")}` : "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#16A34A" }}>{st.enrollmentFeePaid ? `₹${Number(st.enrollmentFeePaid).toLocaleString("en-IN")}` : "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: due > 0 ? "#DC2626" : "#16A34A" }}>{st.totalFee ? `₹${due.toLocaleString("en-IN")}` : "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".68rem", color: "#6B7F99" }}>{st.batchStartDate && st.batchEndDate ? `${st.batchStartDate.slice(5)} → ${st.batchEndDate.slice(5)}` : "—"}</td>
+                          <td style={{ padding: "8px 6px", textAlign: "center" }}>{fullyPaid ? <span style={s.badge("#16A34A", "#F0FDF4")}>Paid</span> : due > 0 ? <span style={s.badge("#DC2626", "#FEF2F2")}>Due</span> : <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>;
+          })()}
+
+          {/* Tips */}
+          <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
+            <div>
+              <strong>Records Section Tips:</strong><br />
+              • Batch {getCurrentBatchYear()}-{String(getCurrentBatchYear() + 1).slice(2)} current session hai (April {getCurrentBatchYear()} — March {getCurrentBatchYear() + 1}). Ye har saal automatically change hota hai<br />
+              • "Previous Years" button se kisi bhi purane batch ka complete record dekh sakte ho<br />
+              • Saara data <strong>permanently saved</strong> hai — RFID expire hone par bhi yahan hamesha dikhega<br />
+              • Class filter se Board + Medium ke hisaab se students ko separate dekho (e.g. 12th Hindi CG+CBSE)<br />
+              • 4 sections: Attendance Record (weekly P/A), Students Record (details), Teacher Records, Fee Record<br />
+              • Expired batch wale pink background me dikhenge
             </div>
           </div>
         </>}
@@ -2644,6 +3949,33 @@ export default function AdminPanel() {
                 </div>
               </div>
               <div><label style={s.label}>Description (optional)</label><input style={s.input} placeholder="Any additional details..." value={holidayForm.description || ""} onChange={e => setHolidayForm({ ...holidayForm, description: e.target.value })} /></div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={s.label}>Holiday For *</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  <button type="button" onClick={() => setHolidayForm({ ...holidayForm, holidayFor: "all", holidayClasses: [] })} style={{ padding: "6px 14px", borderRadius: 8, border: holidayForm.holidayFor !== "specific" ? "2px solid #16A34A" : "1px solid #D4DEF0", background: holidayForm.holidayFor !== "specific" ? "#F0FDF4" : "#fff", color: holidayForm.holidayFor !== "specific" ? "#16A34A" : "#6B7F99", fontSize: ".78rem", fontWeight: 700, cursor: "pointer" }}>
+                    <i className="fas fa-users" style={{ marginRight: 4 }} />All Students (Sabhi ke liye)
+                  </button>
+                  <button type="button" onClick={() => setHolidayForm({ ...holidayForm, holidayFor: "specific" })} style={{ padding: "6px 14px", borderRadius: 8, border: holidayForm.holidayFor === "specific" ? "2px solid #1349A8" : "1px solid #D4DEF0", background: holidayForm.holidayFor === "specific" ? "#EFF6FF" : "#fff", color: holidayForm.holidayFor === "specific" ? "#1349A8" : "#6B7F99", fontSize: ".78rem", fontWeight: 700, cursor: "pointer" }}>
+                    <i className="fas fa-user-tag" style={{ marginRight: 4 }} />Specific Class (Sirf kuch classes ke liye)
+                  </button>
+                </div>
+                {holidayForm.holidayFor === "specific" && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: 12, background: "#F8FAFD", borderRadius: 10, border: "1px solid #E8EFF8" }}>
+                    {BATCH_OPTIONS.map(b => {
+                      const selected = (holidayForm.holidayClasses || []).includes(b.value);
+                      return (
+                        <button key={b.value} type="button" onClick={() => {
+                          const current = holidayForm.holidayClasses || [];
+                          const updated = selected ? current.filter(v => v !== b.value) : [...current, b.value];
+                          setHolidayForm({ ...holidayForm, holidayClasses: updated });
+                        }} style={{ padding: "5px 12px", borderRadius: 6, border: selected ? "2px solid #1349A8" : "1px solid #D4DEF0", background: selected ? "#EFF6FF" : "#fff", color: selected ? "#1349A8" : "#6B7F99", fontSize: ".72rem", fontWeight: 600, cursor: "pointer", transition: "all .15s" }}>
+                          {selected && <i className="fas fa-check" style={{ marginRight: 4, fontSize: ".6rem" }} />}{b.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
               <div style={{ display: "flex", gap: 10 }}>
                 <button onClick={saveHoliday} disabled={saving} style={s.btnP}><i className="fas fa-save" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Save Holiday"}</button>
                 <button onClick={() => { setShowHolidayForm(false); setHolidayForm({}); }} style={s.btnGray}>Cancel</button>
@@ -2660,17 +3992,94 @@ export default function AdminPanel() {
                 <div><label style={s.label}>Time to Send</label><input style={s.input} type="time" value={notifForm.time || ""} onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} /></div>
                 <div><label style={s.label}>Send To</label>
                   <select style={s.input} value={notifForm.target || "all"} onChange={e => setNotifForm({ ...notifForm, target: e.target.value })}>
-                    <option value="all">All Students & Parents</option><option value="students">Students Only</option><option value="parents">Parents Only</option>
-                    <option value="12th">Class 12 Only</option><option value="11th">Class 11 Only</option><option value="10th">Class 10 Only</option><option value="9th">Class 9 Only</option>
+                    <option value="all">All Students & Parents</option>
+                    <option value="students">All Students Only</option>
+                    <option value="parents">All Parents Only</option>
+                    <optgroup label="Class 12th">
+                      {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </optgroup>
+                    <optgroup label="Class 11th">
+                      {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </optgroup>
+                    <optgroup label="Class 10th">
+                      {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </optgroup>
+                    <optgroup label="Class 9th">
+                      {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </optgroup>
+                    <optgroup label="Junior Classes">
+                      {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </optgroup>
+                    <optgroup label="Entrance Coaching">
+                      {BATCH_OPTIONS.filter(b => b.class === "Navodaya" || b.class === "Prayas").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </optgroup>
                   </select>
                 </div>
               </div>
               <div><label style={s.label}>Notification Type</label>
-                <select style={s.input} value={notifForm.notifType || ""} onChange={e => setNotifForm({ ...notifForm, notifType: e.target.value })}>
+                <select style={s.input} value={notifForm.notifType || ""} onChange={e => {
+                  const val = e.target.value;
+                  if (val === "fee") {
+                    // Fee Reminder = auto set to parents only
+                    setNotifForm({ ...notifForm, notifType: val, target: notifForm.target === "all" || notifForm.target === "students" ? "parents" : notifForm.target, isFeeReminder: true });
+                  } else {
+                    setNotifForm({ ...notifForm, notifType: val, isFeeReminder: false });
+                  }
+                }}>
                   <option value="">Select Type</option><option value="test">Test / Exam</option><option value="holiday">Holiday Notice</option><option value="fee">Fee Reminder</option><option value="event">Event</option><option value="general">General</option>
                 </select>
               </div>
-              <div><label style={s.label}>Message *</label><textarea style={{ ...s.input, height: 80, resize: "none" }} placeholder="e.g. Kal 10th class ka Science test hai 10:00 AM se..." value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} /></div>
+
+              {/* Fee Reminder Info Box */}
+              {notifForm.notifType === "fee" && (
+                <div style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: 14, marginBottom: 12, fontSize: ".8rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                    <i className="fas fa-info-circle" style={{ color: "#D98D04" }} />
+                    <strong style={{ color: "#92400E" }}>Fee Reminder Settings</strong>
+                  </div>
+                  <div style={{ color: "#78350F", lineHeight: 1.6, fontSize: ".76rem" }}>
+                    <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Fee reminder <strong>sirf Parents</strong> ke paas jaayega (auto-selected)<br/>
+                    <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Har parent ko unke <strong>bachche ka pending fee amount</strong> dikhega<br/>
+                    <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Upar "Send To" se <strong>specific batch</strong> select karo ya "All Parents" rakho
+                  </div>
+                  {/* Preview of fee data for selected batch */}
+                  {(() => {
+                    let feeStudents = students.filter(x => x.status === "active");
+                    if (notifForm.target && notifForm.target !== "all" && notifForm.target !== "parents" && notifForm.target !== "students") {
+                      feeStudents = filterByBatch(feeStudents, notifForm.target);
+                    }
+                    const withDue = feeStudents.filter(st => {
+                      const total = Number(st.totalFee || 0);
+                      const paid = Number(st.enrollmentFeePaid || 0);
+                      return total > 0 && paid < total;
+                    });
+                    const totalDue = withDue.reduce((sum, st) => sum + (Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0)), 0);
+                    return (
+                      <div style={{ marginTop: 10, padding: 10, background: "#fff", borderRadius: 8, border: "1px solid #FDE68A" }}>
+                        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: ".74rem" }}>
+                          <span><strong style={{ color: "#DC2626" }}>{withDue.length}</strong> students with pending fees</span>
+                          <span>Total due: <strong style={{ color: "#DC2626" }}>₹{totalDue.toLocaleString("en-IN")}</strong></span>
+                        </div>
+                        {withDue.length > 0 && withDue.length <= 10 && (
+                          <div style={{ marginTop: 8, fontSize: ".7rem", color: "#4A5E78" }}>
+                            {withDue.map(st => {
+                              const due = Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0);
+                              return (
+                                <div key={st.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #FEF3C7" }}>
+                                  <span>{st.studentName} ({st.class})</span>
+                                  <span style={{ color: "#DC2626", fontWeight: 700 }}>₹{due.toLocaleString("en-IN")} due</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              <div><label style={s.label}>Message *</label><textarea style={{ ...s.input, height: 80, resize: "none" }} placeholder={notifForm.notifType === "fee" ? "e.g. Respected Parents, aapke bachche ki pending fees ₹{amount} hai. Kripya jald se jald jama karein. — Patel Institute Dongargaon" : "e.g. Kal 10th class ka Science test hai 10:00 AM se..."} value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} /></div>
               <div style={{ display: "flex", gap: 10 }}>
                 <button onClick={saveNotification} disabled={saving} style={s.btnP}><i className="fas fa-paper-plane" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Schedule"}</button>
                 <button onClick={() => { setShowNotifForm(false); setNotifForm({}); }} style={s.btnGray}>Cancel</button>
@@ -2689,7 +4098,16 @@ export default function AdminPanel() {
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: ".86rem" }}>{h.title}</div>
-                  <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>{h.type || ""} {h.description ? `· ${h.description}` : ""}</div>
+                  <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>
+                    {h.type || ""} {h.description ? `· ${h.description}` : ""}
+                    {h.holidayFor === "specific" && h.holidayClasses?.length > 0 && (
+                      <span style={{ marginLeft: 6 }}>
+                        · <i className="fas fa-user-tag" style={{ marginRight: 3, fontSize: ".6rem", color: "#1349A8" }} />
+                        {h.holidayClasses.map(v => { const b = BATCH_OPTIONS.find(x => x.value === v); return b ? b.label : v; }).join(", ")}
+                      </span>
+                    )}
+                    {(!h.holidayFor || h.holidayFor === "all") && <span style={{ marginLeft: 6 }}>· <i className="fas fa-users" style={{ marginRight: 3, fontSize: ".6rem", color: "#16A34A" }} />All Students</span>}
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button onClick={() => { setShowHolidayForm(true); setHolidayForm({ ...h, editId: h.id }); }} style={s.btnO}><i className="fas fa-edit" /></button>
@@ -2759,7 +4177,24 @@ export default function AdminPanel() {
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
             <select style={{ border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} value={feeClassFilter} onChange={(e) => setFeeClassFilter(e.target.value)}>
               <option value="all">All Classes</option>
-              {["12th", "11th", "10th", "9th", "8th", "7th", "6th", "5th", "4th", "3rd", "2nd"].map(c => <option key={c} value={c}>Class {c}</option>)}
+              <optgroup label="Class 12th">
+                {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Class 11th">
+                {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Class 10th">
+                {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Class 9th">
+                {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Junior Classes">
+                {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
+              <optgroup label="Entrance Coaching">
+                {BATCH_OPTIONS.filter(b => b.class === "Navodaya" || b.class === "Prayas").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </optgroup>
             </select>
             <input style={{ flex: 1, minWidth: 200, border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "8px 12px", fontSize: ".82rem", outline: "none" }} placeholder="Search student..." value={feeSearch} onChange={(e) => setFeeSearch(e.target.value)} />
           </div>
@@ -2782,7 +4217,7 @@ export default function AdminPanel() {
               <tbody>
                 {(() => {
                   let feeList = students.filter(x => x.status === "active");
-                  if (feeClassFilter !== "all") feeList = feeList.filter(x => x.class === feeClassFilter);
+                  if (feeClassFilter !== "all") feeList = filterByBatch(feeList, feeClassFilter);
                   if (feeSearch.trim()) { const q = feeSearch.toLowerCase(); feeList = feeList.filter(x => x.studentName?.toLowerCase().includes(q)); }
 
                   if (feeList.length === 0) return <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No students found</td></tr>;

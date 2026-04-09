@@ -51,15 +51,26 @@ export async function POST(request) {
 
     let studentData = null;
     let studentId = null;
+    let isTeacher = false;
 
     if (!studentSnap.empty) {
       studentId = studentSnap.docs[0].id;
       studentData = studentSnap.docs[0].data();
     }
 
+    // If not found in students, check teachers collection
+    if (!studentData) {
+      const teacherSnap = await db.collection("teachers").where("rfidCode", "==", rfidUpper).limit(1).get();
+      if (!teacherSnap.empty) {
+        studentId = "teacher_" + teacherSnap.docs[0].id;
+        studentData = teacherSnap.docs[0].data();
+        isTeacher = true;
+      }
+    }
+
     let batchValid = true;
     let batchExpired = false;
-    if (studentData) {
+    if (studentData && !isTeacher) {
       const today = new Date().toISOString().split("T")[0];
       const startDate = studentData.batchStartDate || "";
       const endDate = studentData.batchEndDate || "";
@@ -71,11 +82,12 @@ export async function POST(request) {
       rfidCode: rfidUpper,
       type: type,
       studentId: studentId,
-      studentName: studentData?.name || studentData?.studentName || "Unknown",
-      studentClass: studentData?.class || studentData?.presentClass || "N/A",
+      studentName: isTeacher ? (studentData?.name || "Unknown Teacher") : (studentData?.name || studentData?.studentName || "Unknown"),
+      studentClass: isTeacher ? "Teacher" : (studentData?.class || studentData?.presentClass || "N/A"),
       studentPhoto: studentData?.photo || "",
       batchValid: batchValid,
       batchExpired: batchExpired,
+      isTeacher: isTeacher,
       deviceId: deviceId || "device-1",
       date: new Date().toISOString().split("T")[0],
       timestamp: new Date().toISOString(),
@@ -84,7 +96,7 @@ export async function POST(request) {
 
     await db.collection("attendance").add(record);
 
-    return NextResponse.json({ success: true, student: record.studentName, type: type, matched: !!studentData }, { status: 200 });
+    return NextResponse.json({ success: true, name: record.studentName, type: type, matched: !!studentData, isTeacher: isTeacher }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: "Server error: " + error.message }, { status: 500 });
   }
