@@ -32,14 +32,14 @@ if (!admin.apps.length) {
 const db = admin.apps.length ? admin.firestore() : null;
 
 // ═══════════════════════════════════════════
-// POST — RFID Device sends attendance data (CRASH-PROOF)
+// POST — RFID Device sends attendance data
 // ═══════════════════════════════════════════
 export async function POST(request) {
   try {
     if (!db) return NextResponse.json({ error: "Database not initialized" }, { status: 500 });
 
     const body = await request.json();
-    const { rfidCode, type, deviceId, secret, timestamp } = body; 
+    const { rfidCode, type, deviceId, secret } = body;
 
     const apiSecret = process.env.ATTENDANCE_API_SECRET || "pid_rfid_2026";
     if (secret !== apiSecret) return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
@@ -58,6 +58,7 @@ export async function POST(request) {
       studentData = studentSnap.docs[0].data();
     }
 
+    // If not found in students, check teachers collection
     if (!studentData) {
       const teacherSnap = await db.collection("teachers").where("rfidCode", "==", rfidUpper).limit(1).get();
       if (!teacherSnap.empty) {
@@ -77,21 +78,6 @@ export async function POST(request) {
       if (endDate && today > endDate) { batchValid = false; batchExpired = true; }
     }
 
-    // ═══ NAYA CRASH-PROOF TIME LOGIC ═══
-    let exactTapTime = new Date(); // Default aaj ka time
-    
-    if (timestamp) {
-      const parsedTimestamp = Number(timestamp);
-      // Check agar number valid hai
-      if (!isNaN(parsedTimestamp)) {
-        const tempDate = new Date(parsedTimestamp);
-        // Check agar date convert hone ke baad valid hai
-        if (!isNaN(tempDate.getTime())) {
-          exactTapTime = tempDate;
-        }
-      }
-    }
-
     const record = {
       rfidCode: rfidUpper,
       type: type,
@@ -103,8 +89,8 @@ export async function POST(request) {
       batchExpired: batchExpired,
       isTeacher: isTeacher,
       deviceId: deviceId || "device-1",
-      date: exactTapTime.toISOString().split("T")[0], 
-      timestamp: exactTapTime.toISOString(),          
+      date: new Date().toISOString().split("T")[0],
+      timestamp: new Date().toISOString(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
@@ -115,7 +101,6 @@ export async function POST(request) {
     return NextResponse.json({ error: "Server error: " + error.message }, { status: 500 });
   }
 }
-
 // ═══════════════════════════════════════════
 // GET — Fetch attendance records for Admin
 // ═══════════════════════════════════════════
