@@ -1,0 +1,22 @@
+{
+  "name": "PID Parent App",
+  "short_name": "PID Parent",
+  "description": "Patel Institute Dongargaon - Parent App",
+  "start_url": "/parent-app",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1d4ed8",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/pid_logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/pid_logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
