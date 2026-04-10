@@ -465,6 +465,7 @@ export default function AdminPanel() {
   const [holidayForm, setHolidayForm] = useState({});
   const [showHolidayForm, setShowHolidayForm] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [leaveApplications, setLeaveApplications] = useState([]); // parent leave requests
   const [notifForm, setNotifForm] = useState({});
   const [showNotifForm, setShowNotifForm] = useState(false);
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
@@ -508,11 +509,50 @@ export default function AdminPanel() {
     { id: "JEE-NEET", label: "IIT-JEE & NEET (9th-12th)", shortLabel: "JEE+NEET", icon: "fa-flask", color: "#BE185D" },
   ];
 
+  // ═══ EXAM & TEST MANAGEMENT STATES ═══
+  const [examList, setExamList] = useState([]); // Firebase se exams
+  const [examForm, setExamForm] = useState({}); // new/edit exam form
+  const [showExamForm, setShowExamForm] = useState(false);
+  const [examEditId, setExamEditId] = useState(null);
+  const [examClassFilter, setExamClassFilter] = useState("all"); // CLASS_CATEGORIES id
+  const [examSearch, setExamSearch] = useState("");
+  const [examMarksModal, setExamMarksModal] = useState(null); // exam id for marks entry
+  const [marksData, setMarksData] = useState({}); // {studentId: {subject1: marks, subject2: marks...}}
+  const [marksSaving, setMarksSaving] = useState(false);
+  const [examViewMode, setExamViewMode] = useState("list"); // list | results
+
+  // ═══ STUDENT PERFORMANCE TRACKER STATES ═══
+  const [perfStudent, setPerfStudent] = useState(null); // selected student for performance view
+  const [perfClassFilter, setPerfClassFilter] = useState("all");
+  const [perfSearch, setPerfSearch] = useState("");
+  const [perfExamData, setPerfExamData] = useState([]); // selected student ke saare exam results
+  const [perfLoading, setPerfLoading] = useState(false);
+  const [perfQuizData, setPerfQuizData] = useState([]); // AI quiz history
+  const [perfDoubtData, setPerfDoubtData] = useState([]); // AI doubt history
+  const [perfTab, setPerfTab] = useState("overview"); // overview | quizzes | doubts
+
+  // ═══ ONLINE TEST STATES ═══
+  const [allDoubtsData, setAllDoubtsData] = useState([]); // saare students ke doubts
+  const [allDoubtsLoading, setAllDoubtsLoading] = useState(false);
+  const [otList, setOtList] = useState([]); // online tests from Firebase
+  const [otForm, setOtForm] = useState({}); // test creation form
+  const [showOtForm, setShowOtForm] = useState(false);
+  const [otEditId, setOtEditId] = useState(null);
+  const [otStep, setOtStep] = useState(1); // 1 = test info, 2 = questions
+  const [otQuestions, setOtQuestions] = useState([]); // [{question, options:[], correctAnswer, explanation}]
+  const [otQuestionMode, setOtQuestionMode] = useState("manual"); // manual | ai | pdf
+  const [otAiGenerating, setOtAiGenerating] = useState(false);
+  const [otAiForm, setOtAiForm] = useState({}); // {chapter, topic, difficulty, count}
+  const [otPdfFile, setOtPdfFile] = useState(null);
+  const [otPdfProcessing, setOtPdfProcessing] = useState(false);
+  const [otClassFilter, setOtClassFilter] = useState("all");
+
   // Fees states
   const [feeClassFilter, setFeeClassFilter] = useState("all");
   const [feeSearch, setFeeSearch] = useState("");
   const [feePaymentForm, setFeePaymentForm] = useState({});
   const [showFeePayment, setShowFeePayment] = useState(null); // student id
+  const [showReceipt, setShowReceipt] = useState(null); // student id for receipt modal
 
   // Form states
   const [showForm, setShowForm] = useState(false);
@@ -602,8 +642,326 @@ export default function AdminPanel() {
       arr.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
       setNotifications(arr);
     }));
+    // ═══ EXAMS LISTENER ═══
+    unsubs.push(onSnapshot(collection(db, "exams"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.examDate || "").localeCompare(a.examDate || ""));
+      setExamList(arr);
+    }));
+    // ═══ ONLINE TESTS LISTENER ═══
+    unsubs.push(onSnapshot(collection(db, "online_tests"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
+      setOtList(arr);
+    }));
+    // ═══ LEAVE APPLICATIONS LISTENER ═══
+    unsubs.push(onSnapshot(collection(db, "leave_applications"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      setLeaveApplications(arr);
+    }));
     return () => unsubs.forEach(u => u());
   }, [isAdmin]);
+
+  // ═══ ONLINE TEST CRUD FUNCTIONS ═══
+  async function saveOnlineTest() {
+    if (!otForm.title?.trim()) { showMsg("Test title required!"); return; }
+    if (!otForm.subject?.trim()) { showMsg("Subject required!"); return; }
+    if (!otForm.forClass) { showMsg("Class select karo!"); return; }
+    if (otQuestions.length === 0) { showMsg("Kam se kam 1 question add karo!"); return; }
+    setSaving(true);
+    try {
+      const data = {
+        title: otForm.title,
+        subject: otForm.subject,
+        forClass: otForm.forClass,
+        testType: otForm.testType || "practice",
+        duration: Number(otForm.duration) || 30,
+        totalQuestions: otQuestions.length,
+        totalMarks: otQuestions.length,
+        instructions: otForm.instructions || "",
+        chapter: otForm.chapter || "",
+        topic: otForm.topic || "",
+        board: otForm.board || "",
+        medium: otForm.medium || "",
+        difficulty: otForm.difficulty || "medium",
+        isActive: otForm.isActive !== false,
+        scheduledDate: otForm.scheduledDate || "",
+        scheduledTime: otForm.scheduledTime || "",
+        questions: otQuestions.map(q => ({
+          question: q.question,
+          options: q.options || ["", "", "", ""],
+          correctAnswer: Number(q.correctAnswer) || 0,
+          explanation: q.explanation || "",
+        })),
+      };
+      if (otEditId) {
+        await updateDoc(doc(db, "online_tests", otEditId), { ...data, updatedAt: serverTimestamp() });
+        showMsg("Test updated!");
+      } else {
+        await addDoc(collection(db, "online_tests"), { ...data, createdAt: serverTimestamp(), createdBy: user?.email || "admin" });
+        showMsg("Online Test created! Students ab Student App me ye test de sakte hain.");
+      }
+      setShowOtForm(false); setOtForm({}); setOtQuestions([]); setOtEditId(null); setOtStep(1);
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+
+  async function deleteOnlineTest(id) {
+    if (!confirm("Delete this online test? Students ab ye test nahi de payenge.")) return;
+    try {
+      await deleteDoc(doc(db, "online_tests", id));
+      // Delete all submissions
+      const subSnap = await getDocs(query(collection(db, "test_submissions"), where("testId", "==", id)));
+      for (const d of subSnap.docs) { await deleteDoc(doc(db, "test_submissions", d.id)); }
+      showMsg("Online Test deleted!");
+    } catch (e) { showMsg("Error: " + e.message); }
+  }
+
+  function toggleTestActive(id, currentStatus) {
+    updateDoc(doc(db, "online_tests", id), { isActive: !currentStatus, updatedAt: serverTimestamp() })
+      .then(() => showMsg(currentStatus ? "Test deactivated — students ko ab nahi dikhega" : "Test activated — students ab de sakte hain"))
+      .catch(e => showMsg("Error: " + e.message));
+  }
+
+  // ═══ AI Question Generation (Gemini API) ═══
+  async function generateAiQuestions() {
+    if (!otAiForm.chapter?.trim()) { showMsg("Chapter/Topic zaruri hai!"); return; }
+    setOtAiGenerating(true);
+    try {
+      const count = Number(otAiForm.count) || 10;
+      const difficulty = otAiForm.difficulty || "medium";
+      const subject = otForm.subject || "General";
+      const board = otForm.board || "CG Board";
+      const medium = otForm.medium || "Hindi";
+      const classLevel = otForm.forClass ? (CLASS_CATEGORIES.find(c => c.id === otForm.forClass)?.label || otForm.forClass) : "12th";
+
+      const prompt = `You are an expert ${subject} teacher for ${classLevel} (${board}, ${medium} medium) in India.
+Generate exactly ${count} MCQ questions from chapter/topic: "${otAiForm.chapter}" ${otAiForm.topic ? `(specific topic: ${otAiForm.topic})` : ""}.
+Difficulty: ${difficulty}.
+
+IMPORTANT: Respond ONLY in valid JSON array format, no markdown, no backticks, no explanation.
+Each question object must have:
+- "question": the question text (in ${medium === "Hindi" ? "Hindi" : "English"})
+- "options": array of exactly 4 options
+- "correctAnswer": index of correct option (0, 1, 2, or 3)
+- "explanation": brief explanation why the answer is correct (in ${medium === "Hindi" ? "Hindi" : "English"})
+
+Example format:
+[{"question":"What is...","options":["A","B","C","D"],"correctAnswer":0,"explanation":"Because..."}]`;
+
+      const res = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (data.error) { showMsg("AI Error: " + data.error); setOtAiGenerating(false); return; }
+
+      let text = data.response || data.text || "";
+      // Clean markdown fences
+      text = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+      const questions = JSON.parse(text);
+
+      if (Array.isArray(questions) && questions.length > 0) {
+        const formatted = questions.map(q => ({
+          question: q.question || "",
+          options: Array.isArray(q.options) ? q.options : ["", "", "", ""],
+          correctAnswer: Number(q.correctAnswer) || 0,
+          explanation: q.explanation || "",
+        }));
+        setOtQuestions(prev => [...prev, ...formatted]);
+        showMsg(`${formatted.length} questions AI se generate ho gaye! Review karo.`);
+      } else {
+        showMsg("AI ne valid questions nahi diye. Dobara try karo.");
+      }
+    } catch (e) {
+      console.error("AI generation error:", e);
+      showMsg("AI Error: " + e.message + " — Check karo Gemini API kaam kar rahi hai.");
+    }
+    setOtAiGenerating(false);
+  }
+
+  // ═══ PDF Question Extraction (Gemini API) ═══
+  async function extractQuestionsFromPdf() {
+    if (!otPdfFile) { showMsg("Pehle PDF file select karo!"); return; }
+    setOtPdfProcessing(true);
+    try {
+      // PDF ko base64 me convert karo
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const base64 = e.target.result.split(",")[1];
+        const subject = otForm.subject || "General";
+        const medium = otForm.medium || "Hindi";
+
+        const prompt = `You are an expert question paper analyzer. I am giving you a PDF of a question paper / worksheet.
+Analyze this PDF and extract ALL questions from it. Convert them into MCQ format.
+If questions are already MCQ, extract them as-is. If questions are subjective, convert them to MCQ with 4 options.
+
+IMPORTANT: Respond ONLY in valid JSON array format, no markdown, no backticks.
+Each question object must have:
+- "question": the question text (keep original language ${medium})
+- "options": array of exactly 4 options
+- "correctAnswer": index of correct option (0, 1, 2, or 3)
+- "explanation": brief explanation
+
+Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"explanation":"..."}]`;
+
+        const res = await fetch("/api/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            pdfBase64: base64,
+            mimeType: otPdfFile.type || "application/pdf",
+          }),
+        });
+        const data = await res.json();
+        if (data.error) { showMsg("PDF Error: " + data.error); setOtPdfProcessing(false); return; }
+
+        let text = data.response || data.text || "";
+        text = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+        const questions = JSON.parse(text);
+
+        if (Array.isArray(questions) && questions.length > 0) {
+          const formatted = questions.map(q => ({
+            question: q.question || "",
+            options: Array.isArray(q.options) ? q.options : ["", "", "", ""],
+            correctAnswer: Number(q.correctAnswer) || 0,
+            explanation: q.explanation || "",
+          }));
+          setOtQuestions(prev => [...prev, ...formatted]);
+          showMsg(`PDF se ${formatted.length} questions extract ho gaye! Review karo.`);
+        } else {
+          showMsg("PDF se questions extract nahi ho paye. Clear PDF upload karo.");
+        }
+        setOtPdfProcessing(false);
+      };
+      reader.readAsDataURL(otPdfFile);
+    } catch (e) {
+      showMsg("PDF Error: " + e.message);
+      setOtPdfProcessing(false);
+    }
+  }
+
+  // ═══ EXAM CRUD FUNCTIONS ═══
+  async function saveExam() {
+    if (!examForm.title?.trim()) { showMsg("Exam title required!"); return; }
+    if (!examForm.examDate) { showMsg("Exam date required!"); return; }
+    setSaving(true);
+    try {
+      const data = { ...examForm };
+      // Subjects array banao
+      if (!data.subjects || data.subjects.length === 0) {
+        data.subjects = ["Physics", "Chemistry", "Maths/Bio", "Science", "English", "Social Study"].filter((_, i) => data[`sub${i+1}`]);
+        if (data.subjects.length === 0) data.subjects = ["Physics", "Chemistry", "Maths/Bio"];
+      }
+      Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
+      if (examEditId) {
+        const { id, ...rest } = data;
+        await updateDoc(doc(db, "exams", examEditId), { ...rest, updatedAt: serverTimestamp() });
+        showMsg("Exam updated!");
+      } else {
+        await addDoc(collection(db, "exams"), { ...data, createdAt: serverTimestamp() });
+        showMsg("Exam created!");
+      }
+      setShowExamForm(false); setExamForm({}); setExamEditId(null);
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+
+  async function deleteExam(id) {
+    if (!confirm("Delete this exam and all its marks data?")) return;
+    try {
+      await deleteDoc(doc(db, "exams", id));
+      // Delete all marks for this exam
+      const marksSnap = await getDocs(query(collection(db, "exam_marks"), where("examId", "==", id)));
+      for (const d of marksSnap.docs) { await deleteDoc(doc(db, "exam_marks", d.id)); }
+      showMsg("Exam deleted!");
+    } catch (e) { showMsg("Error: " + e.message); }
+  }
+
+  // ═══ MARKS ENTRY — Load existing marks for an exam ═══
+  async function openMarksEntry(exam) {
+    setExamMarksModal(exam);
+    setMarksData({});
+    try {
+      const snap = await getDocs(query(collection(db, "exam_marks"), where("examId", "==", exam.id)));
+      const existing = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        existing[data.studentId] = { ...data.marks, _docId: d.id };
+      });
+      setMarksData(existing);
+    } catch (e) { console.error("Marks load error:", e); }
+  }
+
+  // ═══ MARKS SAVE — Ek student ke marks save karo ═══
+  async function saveStudentMarks(examId, studentId, marks, examTitle) {
+    setMarksSaving(true);
+    try {
+      const st = students.find(x => x.id === studentId);
+      const existingDocId = marksData[studentId]?._docId;
+      const marksCopy = { ...marks };
+      delete marksCopy._docId;
+      const data = {
+        examId,
+        studentId,
+        studentName: st?.studentName || "",
+        studentClass: st?.class || "",
+        studentBoard: st?.board || "",
+        studentMedium: st?.medium || "",
+        marks: marksCopy,
+        totalMarks: Object.values(marksCopy).reduce((s, v) => s + (Number(v) || 0), 0),
+        examTitle: examTitle || "",
+        updatedAt: serverTimestamp(),
+      };
+      if (existingDocId) {
+        await updateDoc(doc(db, "exam_marks", existingDocId), data);
+      } else {
+        const newDoc = await addDoc(collection(db, "exam_marks"), { ...data, createdAt: serverTimestamp() });
+        setMarksData(prev => ({ ...prev, [studentId]: { ...marksCopy, _docId: newDoc.id } }));
+      }
+      showMsg(`${st?.studentName} marks saved!`);
+    } catch (e) { showMsg("Error: " + e.message); }
+    setMarksSaving(false);
+  }
+
+  // ═══ PERFORMANCE — Load student ke saare exam results + AI data ═══
+  async function loadStudentPerformance(student) {
+    setPerfStudent(student);
+    setPerfLoading(true);
+    setPerfTab("overview");
+    try {
+      // Exam marks
+      const snap = await getDocs(query(collection(db, "exam_marks"), where("studentId", "==", student.id)));
+      const results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      results.sort((a, b) => {
+        const examA = examList.find(e => e.id === a.examId);
+        const examB = examList.find(e => e.id === b.examId);
+        return (examB?.examDate || "").localeCompare(examA?.examDate || "");
+      });
+      setPerfExamData(results);
+
+      // AI Quiz history
+      try {
+        const quizSnap = await getDocs(query(collection(db, "quiz_history"), where("studentId", "==", student.id)));
+        const quizResults = quizSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        quizResults.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
+        setPerfQuizData(quizResults);
+      } catch (e) { console.error("Quiz history load error:", e); setPerfQuizData([]); }
+
+      // AI Doubt history
+      try {
+        const doubtSnap = await getDocs(query(collection(db, "doubt_history"), where("studentId", "==", student.id)));
+        const doubtResults = doubtSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        doubtResults.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
+        setPerfDoubtData(doubtResults);
+      } catch (e) { console.error("Doubt history load error:", e); setPerfDoubtData([]); }
+
+    } catch (e) { console.error("Performance load error:", e); setPerfExamData([]); }
+    setPerfLoading(false);
+  }
 
   // Individual person attendance calendar listener
   useEffect(() => {
@@ -1205,19 +1563,42 @@ export default function AdminPanel() {
   // HOLIDAYS CRUD
   // ═══════════════════════════════════════════
   async function saveHoliday() {
-    if (!holidayForm.date) { showMsg("Date is required!"); return; }
     if (!holidayForm.title?.trim()) { showMsg("Holiday title is required!"); return; }
     setSaving(true);
     try {
       const data = { ...holidayForm };
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
-      if (holidayForm.editId) {
-        const { editId: eid, ...rest } = data;
-        await updateDoc(doc(db, "holidays", eid), { ...rest, updatedAt: serverTimestamp() });
-        showMsg("Holiday updated!");
+
+      // ═══ Multiple days support ═══
+      if (holidayForm.dateFrom && holidayForm.dateTo && holidayForm.dateFrom !== holidayForm.dateTo) {
+        // Multiple days — har din ke liye alag holiday entry banao
+        const start = new Date(holidayForm.dateFrom);
+        const end = new Date(holidayForm.dateTo);
+        if (end < start) { showMsg("End date start date se pehle nahi ho sakti!"); setSaving(false); return; }
+        let count = 0;
+        const current = new Date(start);
+        while (current <= end) {
+          const dateStr = current.toISOString().split("T")[0];
+          const { dateFrom, dateTo, editId: eid, ...rest } = data;
+          await addDoc(collection(db, "holidays"), { ...rest, date: dateStr, createdAt: serverTimestamp() });
+          count++;
+          current.setDate(current.getDate() + 1);
+        }
+        showMsg(`${count} din ki chhuttiyan add ho gayin! (${holidayForm.dateFrom} → ${holidayForm.dateTo})`);
       } else {
-        await addDoc(collection(db, "holidays"), { ...data, createdAt: serverTimestamp() });
-        showMsg("Holiday added!");
+        // Single day
+        const singleDate = holidayForm.date || holidayForm.dateFrom || "";
+        if (!singleDate) { showMsg("Date is required!"); setSaving(false); return; }
+        const { dateFrom, dateTo, ...cleanData } = data;
+        cleanData.date = singleDate;
+        if (holidayForm.editId) {
+          const { editId: eid, ...rest } = cleanData;
+          await updateDoc(doc(db, "holidays", eid), { ...rest, updatedAt: serverTimestamp() });
+          showMsg("Holiday updated!");
+        } else {
+          await addDoc(collection(db, "holidays"), { ...cleanData, createdAt: serverTimestamp() });
+          showMsg("Holiday added!");
+        }
       }
       setShowHolidayForm(false); setHolidayForm({});
     } catch (e) { showMsg("Error: " + e.message); }
@@ -1283,8 +1664,8 @@ export default function AdminPanel() {
     } catch (e) { showMsg("Error: " + e.message); }
   }
 
-  // Mark absent for student
-  async function markAbsent(student) {
+  // Mark absent for student (with reason)
+  async function markAbsent(student, reason = "") {
     try {
       const today = attDate || new Date().toISOString().split("T")[0];
       const record = {
@@ -1299,11 +1680,12 @@ export default function AdminPanel() {
         date: today,
         timestamp: new Date().toISOString(),
         manual: true,
+        absentReason: reason || "",
         markedBy: user?.email || "admin",
         createdAt: serverTimestamp(),
       };
       await addDoc(collection(db, "attendance"), record);
-      showMsg(`${student.studentName} marked Absent`);
+      showMsg(`${student.studentName} marked Absent${reason ? " — " + reason : ""}`);
     } catch (e) { showMsg("Error: " + e.message); }
   }
 
@@ -1523,6 +1905,10 @@ export default function AdminPanel() {
     { id: "attendance", icon: "fa-id-card-alt", label: "Attendance" },
     { id: "records", icon: "fa-archive", label: "Records" },
     { id: "holidays", icon: "fa-calendar-check", label: "Holidays & Schedule" },
+    { id: "exams", icon: "fa-file-alt", label: "Exams & Tests" },
+    { id: "performance", icon: "fa-chart-line", label: "Performance" },
+    { id: "online_tests", icon: "fa-laptop", label: "Online Tests" },
+    { id: "ai_doubts", icon: "fa-brain", label: "AI Doubt Insights" },
     { id: "fees", icon: "fa-rupee-sign", label: "Fee Management" },
     { id: "settings", icon: "fa-cog", label: "Website Settings" },
   ];
@@ -1569,24 +1955,29 @@ export default function AdminPanel() {
           <h2 style={{ fontSize: "1.3rem", fontWeight: 800, marginBottom: 20 }}>Dashboard</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 16, marginBottom: 24 }}>
             {[
-              { n: courses.length, l: "Courses", c: "#1349A8", icon: "fa-book" },
-              { n: toppers.length, l: "Featured Toppers", c: "#D98D04", icon: "fa-trophy" },
-              { n: events.length, l: "Events", c: "#7C3AED", icon: "fa-calendar" },
-              { n: teachers.length, l: "Teachers", c: "#059669", icon: "fa-chalkboard-teacher" },
-              { n: pendingReviews.length, l: "Pending Reviews", c: "#DC2626", icon: "fa-clock" },
-              { n: approvedReviews.length, l: "Approved Reviews", c: "#16A34A", icon: "fa-check" },
-              { n: activeEnquiries.length, l: "Active Enquiries", c: "#1349A8", icon: "fa-envelope" },
-              { n: students.filter(s => s.status === "active").length, l: "Active Students", c: "#059669", icon: "fa-user-graduate" },
-              { n: materials.length, l: "Study Materials", c: "#0891B2", icon: "fa-folder-open" },
-              { n: attendance.length, l: "Today's Attendance", c: "#E11D48", icon: "fa-id-card-alt" },
+              { n: courses.length, l: "Courses", c: "#1349A8", icon: "fa-book", tab: "courses" },
+              { n: toppers.length, l: "Featured Toppers", c: "#D98D04", icon: "fa-trophy", tab: "toppers" },
+              { n: events.length, l: "Events", c: "#7C3AED", icon: "fa-calendar", tab: "events" },
+              { n: teachers.length, l: "Teachers", c: "#059669", icon: "fa-chalkboard-teacher", tab: "teachers" },
+              { n: pendingReviews.length, l: "Pending Reviews", c: "#DC2626", icon: "fa-clock", tab: "reviews" },
+              { n: approvedReviews.length, l: "Approved Reviews", c: "#16A34A", icon: "fa-check", tab: "reviews" },
+              { n: activeEnquiries.length, l: "Active Enquiries", c: "#1349A8", icon: "fa-envelope", tab: "enquiries" },
+              { n: students.filter(s => s.status === "active").length, l: "Active Students", c: "#059669", icon: "fa-user-graduate", tab: "students" },
+              { n: materials.length, l: "Study Materials", c: "#0891B2", icon: "fa-folder-open", tab: "materials" },
+              { n: attendance.length, l: "Today's Attendance", c: "#E11D48", icon: "fa-id-card-alt", tab: "attendance" },
+              { n: examList.length, l: "Exams & Tests", c: "#1349A8", icon: "fa-file-alt", tab: "exams" },
+              { n: otList.length, l: "Online Tests", c: "#7C3AED", icon: "fa-laptop", tab: "online_tests" },
+              { n: holidays.length, l: "Holidays", c: "#D98D04", icon: "fa-calendar-check", tab: "holidays" },
+              { n: (() => { const tf = students.reduce((s, st) => s + Number(st.totalFee || 0), 0); const tp = students.reduce((s, st) => s + Number(st.enrollmentFeePaid || 0), 0); return `₹${Math.max(0, tf - tp).toLocaleString("en-IN")}`; })(), l: "Fee Due", c: "#DC2626", icon: "fa-rupee-sign", tab: "fees" },
             ].map((x, i) => (
-              <div key={i} style={s.stat} onClick={() => { if (x.l.includes("Enquir")) setTab("enquiries"); else if (x.l.includes("Review")) setTab("reviews"); else if (x.l.includes("Course")) setTab("courses"); }} className={x.l.includes("Enquir") || x.l.includes("Review") || x.l.includes("Course") ? "clickable" : ""}>
+              <div key={i} style={{ ...s.stat, cursor: "pointer", transition: "all .2s", border: "1px solid #E8EFF8" }} onClick={() => { setTab(x.tab); resetForm(); }}>
                 <i className={`fas ${x.icon}`} style={{ fontSize: "1.4rem", color: x.c, marginBottom: 8 }} />
                 <div style={{ fontSize: "1.8rem", fontWeight: 800, color: x.c }}>{x.n}</div>
                 <div style={{ fontSize: ".78rem", color: "#6B7F99" }}>{x.l}</div>
               </div>
             ))}
           </div>
+
           {/* Recent Enquiries */}
           <div style={s.card}>
             <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}>Recent Enquiries</h3>
@@ -1597,6 +1988,12 @@ export default function AdminPanel() {
               </div>
             ))}
             {activeEnquiries.length === 0 && <p style={{ color: "#6B7F99", fontSize: ".84rem" }}>No active enquiries.</p>}
+          </div>
+
+          {/* ═══ COMMON AI DOUBTS — Saare students ke common questions ═══ */}
+          <div style={{ ...s.card, marginTop: 16, cursor: "pointer" }} onClick={() => setTab("ai_doubts")}>
+            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 8 }}><i className="fas fa-brain" style={{ marginRight: 8, color: "#7C3AED" }} />AI Doubt Insights — Common Questions</h3>
+            <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Click to see what students are commonly asking AI → Subject-wise analysis</p>
           </div>
         </>}
 
@@ -2126,6 +2523,15 @@ export default function AdminPanel() {
               </div>
             </div>
 
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={s.label}><i className="fas fa-envelope" style={{ marginRight: 4, color: "#DC2626" }} />Gmail ID</label>
+                <input style={s.input} type="email" placeholder="e.g. teacher@gmail.com" value={form.email || ""} onChange={e => setForm({ ...form, email: e.target.value })} />
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 10 }}>
+                {form.email && <div style={{ fontSize: ".68rem", color: "#16A34A" }}><i className="fas fa-check-circle" style={{ marginRight: 3 }} />Email: {form.email}</div>}
+              </div>
+            </div>
             {/* ── RFID CARD VALIDITY PERIOD ── */}
             <div style={{ background: "#FAF5FF", borderRadius: 10, padding: 14, border: "1px solid #E9D5FF", marginBottom: 12 }}>
               <p style={{ fontSize: ".76rem", color: "#6B21A8", margin: "0 0 10px 0", fontWeight: 600 }}><i className="fas fa-clock" style={{ marginRight: 4 }} /> RFID Card Validity — Session/Batch Duration</p>
@@ -2207,6 +2613,7 @@ export default function AdminPanel() {
                   {t.experience && <span><i className="fas fa-briefcase" style={{ marginRight: 4, color: "#6B7F99" }} />{t.experience}</span>}
                   {t.classes && <span><i className="fas fa-chalkboard" style={{ marginRight: 4, color: "#6B7F99" }} />{t.classes}</span>}
                   {t.rfidCode && <span><i className="fas fa-id-card" style={{ marginRight: 4, color: "#7C3AED" }} /><span style={{ fontFamily: "monospace", fontSize: ".72rem" }}>{t.rfidCode}</span></span>}
+                  {t.email && <span><i className="fas fa-envelope" style={{ marginRight: 4, color: "#DC2626" }} />{t.email}</span>}
                 </div>
                 {/* RFID Card Validity Status */}
                 {t.cardValidFrom && t.cardValidTo && (() => {
@@ -2539,6 +2946,27 @@ export default function AdminPanel() {
               <div><label style={s.label}>Subject 1</label><input style={s.input} placeholder="Physics / Science" value={form.subject1 || ""} onChange={e => setForm({ ...form, subject1: e.target.value })} /></div>
               <div><label style={s.label}>Subject 2</label><input style={s.input} placeholder="Chemistry / Maths" value={form.subject2 || ""} onChange={e => setForm({ ...form, subject2: e.target.value })} /></div>
               <div><label style={s.label}>Subject 3</label><input style={s.input} placeholder="Maths / Bio" value={form.subject3 || ""} onChange={e => setForm({ ...form, subject3: e.target.value })} /></div>
+            </div>
+
+            {/* ── SUBJECT-WISE FEE (Receipt ke liye) ── */}
+            <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-receipt" style={{ color: "#D98D04" }} /> Subject-wise Fee (Receipt ke liye)</div>
+            <div style={{ background: "#FFFBEB", borderRadius: 10, padding: 14, border: "1px solid #FDE68A", marginBottom: 12 }}>
+              <p style={{ fontSize: ".76rem", color: "#92400E", margin: "0 0 10px 0" }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} /> Ye fees receipt me subject-wise print hongi. Khali chhodoge toh receipt me nahi dikhega.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div><label style={s.label}>{form.subject1 || "Subject 1"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 4000" value={form.fee1 || ""} onChange={e => setForm({ ...form, fee1: e.target.value })} /></div>
+                <div><label style={s.label}>{form.subject2 || "Subject 2"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 4000" value={form.fee2 || ""} onChange={e => setForm({ ...form, fee2: e.target.value })} /></div>
+                <div><label style={s.label}>{form.subject3 || "Subject 3"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 4000" value={form.fee3 || ""} onChange={e => setForm({ ...form, fee3: e.target.value })} /></div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div><label style={s.label}>Subject 4 Name</label><input style={s.input} placeholder="Science / English" value={form.subject4 || ""} onChange={e => setForm({ ...form, subject4: e.target.value })} /></div>
+                <div><label style={s.label}>Subject 5 Name</label><input style={s.input} placeholder="English / SST" value={form.subject5 || ""} onChange={e => setForm({ ...form, subject5: e.target.value })} /></div>
+                <div><label style={s.label}>Subject 6 Name</label><input style={s.input} placeholder="Social Study" value={form.subject6 || ""} onChange={e => setForm({ ...form, subject6: e.target.value })} /></div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div><label style={s.label}>{form.subject4 || "Subject 4"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 3000" value={form.fee4 || ""} onChange={e => setForm({ ...form, fee4: e.target.value })} /></div>
+                <div><label style={s.label}>{form.subject5 || "Subject 5"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 3000" value={form.fee5 || ""} onChange={e => setForm({ ...form, fee5: e.target.value })} /></div>
+                <div><label style={s.label}>{form.subject6 || "Subject 6"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 3000" value={form.fee6 || ""} onChange={e => setForm({ ...form, fee6: e.target.value })} /></div>
+              </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <div><label style={s.label}>Navodaya Vidyalaya</label><select style={s.input} value={form.navodaya || ""} onChange={e => setForm({ ...form, navodaya: e.target.value })}><option value="">Select</option><option>Yes</option><option>No</option></select></div>
@@ -2899,10 +3327,25 @@ export default function AdminPanel() {
                             ) : <span style={{ color: "#B0C4DC" }}>—</span>}
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                            {isHol ? <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>
-                              : isPresent ? <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>
-                              : isAbsentManual ? <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>
-                              : <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>}
+                            {(() => {
+                              const stLeave = leaveApplications.find(la => la.studentId === st.id && la.date === attDate);
+                              if (isHol) return <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>;
+                              if (isPresent) return <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>;
+                              if (isAbsentManual) return (
+                                <div>
+                                  <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>
+                                  {stLeave && <div onClick={() => alert("Student: " + st.studentName + "\nDate: " + stLeave.date + "\nType: " + (stLeave.leaveType === "full_day" ? "Full Day" : stLeave.leaveType === "half_day" ? "Half Day" : "Emergency") + "\nReason: " + stLeave.reason + "\nStatus: " + (stLeave.status || "pending"))} style={{ marginTop: 4, cursor: "pointer", fontSize: ".62rem", color: "#f59e0b", fontWeight: 600, background: "#fffbeb", padding: "2px 6px", borderRadius: 4, border: "1px solid #fde68a", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }} title={stLeave.reason}>📝 {stLeave.reason?.slice(0, 10)}{stLeave.reason?.length > 10 ? "..." : ""}</div>}
+                                  {isAbsentManual.absentReason && !stLeave && <div style={{ marginTop: 3, fontSize: ".6rem", color: "#6B7F99", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={isAbsentManual.absentReason}>{isAbsentManual.absentReason.slice(0, 12)}{isAbsentManual.absentReason.length > 12 ? "..." : ""}</div>}
+                                </div>
+                              );
+                              if (stLeave) return (
+                                <div>
+                                  <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>
+                                  <div onClick={() => alert("Student: " + st.studentName + "\nDate: " + stLeave.date + "\nType: " + (stLeave.leaveType === "full_day" ? "Full Day" : stLeave.leaveType === "half_day" ? "Half Day" : "Emergency") + "\nReason: " + stLeave.reason + "\nStatus: " + (stLeave.status || "pending"))} style={{ marginTop: 4, cursor: "pointer", fontSize: ".62rem", color: "#f59e0b", fontWeight: 600, background: "#fffbeb", padding: "2px 6px", borderRadius: 4, border: "1px solid #fde68a", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }} title={stLeave.reason}>📝 {stLeave.reason?.slice(0, 10)}{stLeave.reason?.length > 10 ? "..." : ""}</div>
+                                </div>
+                              );
+                              return <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>;
+                            })()}
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "center" }}>
                             {!isPresent && !isAbsentManual && !isHol && (
@@ -2910,7 +3353,7 @@ export default function AdminPanel() {
                                 <button onClick={() => markManualAttendance(st, "in")} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }} title="Mark Present">
                                   <i className="fas fa-check" style={{ marginRight: 3 }} />P
                                 </button>
-                                <button onClick={() => markAbsent(st)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }} title="Mark Absent">
+                                <button onClick={() => { const reason = prompt(`${st.studentName} absent kyun hai? (Reason likho, khali chhodne pe bina reason save hoga)`); if (reason !== null) markAbsent(st, reason); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }} title="Mark Absent with Reason">
                                   <i className="fas fa-times" style={{ marginRight: 3 }} />A
                                 </button>
                               </div>
@@ -3358,14 +3801,16 @@ export default function AdminPanel() {
                                 <i className="fas fa-check" style={{ marginRight: 3 }} />P
                               </button>
                               <button onClick={async () => {
+                                const reason = prompt(`${t.name} absent kyun hai? (Reason likho, khali chhodne pe bina reason save hoga)`);
+                                if (reason === null) return;
                                 try {
                                   await addDoc(collection(db, "attendance"), {
                                     rfidCode: t.rfidCode || `TEACHER_${t.id}`, type: "absent", studentId: `teacher_${t.id}`,
                                     studentName: t.name, studentClass: "Teacher", studentPhoto: t.photo || "",
                                     deviceId: "manual-admin", date: attDate, timestamp: new Date().toISOString(),
-                                    manual: true, isTeacher: true, markedBy: user?.email, createdAt: serverTimestamp(),
+                                    manual: true, isTeacher: true, absentReason: reason || "", markedBy: user?.email, createdAt: serverTimestamp(),
                                   });
-                                  showMsg(`${t.name} marked Absent`);
+                                  showMsg(`${t.name} marked Absent${reason ? " — " + reason : ""}`);
                                 } catch (e) { showMsg("Error: " + e.message); }
                               }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }}>
                                 <i className="fas fa-times" style={{ marginRight: 3 }} />A
@@ -3939,9 +4384,28 @@ export default function AdminPanel() {
           {showHolidayForm && (
             <div style={{ ...s.card, border: "2px solid #7C3AED" }}>
               <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#7C3AED", marginBottom: 14 }}><i className="fas fa-calendar-plus" style={{ marginRight: 8 }} />{holidayForm.editId ? "Edit" : "Add"} Holiday</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 10 }}>
-                <div><label style={s.label}>Date *</label><input style={s.input} type="date" value={holidayForm.date || ""} onChange={e => setHolidayForm({ ...holidayForm, date: e.target.value })} /></div>
-                <div><label style={s.label}>Holiday Title *</label><input style={s.input} placeholder="e.g. Republic Day, Holi" value={holidayForm.title || ""} onChange={e => setHolidayForm({ ...holidayForm, title: e.target.value })} /></div>
+
+              {/* Single vs Multi Day Toggle */}
+              {!holidayForm.editId && <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                <button onClick={() => setHolidayForm({ ...holidayForm, multiDay: false })} style={{ padding: "7px 16px", borderRadius: 8, border: !holidayForm.multiDay ? "2px solid #7C3AED" : "1px solid #D4DEF0", background: !holidayForm.multiDay ? "#FAF5FF" : "#fff", color: !holidayForm.multiDay ? "#7C3AED" : "#6B7F99", fontSize: ".78rem", fontWeight: 700, cursor: "pointer" }}>
+                  <i className="fas fa-calendar-day" style={{ marginRight: 6 }} />Single Day
+                </button>
+                <button onClick={() => setHolidayForm({ ...holidayForm, multiDay: true })} style={{ padding: "7px 16px", borderRadius: 8, border: holidayForm.multiDay ? "2px solid #7C3AED" : "1px solid #D4DEF0", background: holidayForm.multiDay ? "#FAF5FF" : "#fff", color: holidayForm.multiDay ? "#7C3AED" : "#6B7F99", fontSize: ".78rem", fontWeight: 700, cursor: "pointer" }}>
+                  <i className="fas fa-calendar-week" style={{ marginRight: 6 }} />Multiple Days (Date Range)
+                </button>
+              </div>}
+
+              <div style={{ display: "grid", gridTemplateColumns: holidayForm.multiDay ? "1fr 1fr 2fr 1fr" : "1fr 2fr 1fr", gap: 10 }}>
+                {holidayForm.multiDay ? <>
+                  <div><label style={s.label}>From Date *</label><input style={s.input} type="date" value={holidayForm.dateFrom || ""} onChange={e => setHolidayForm({ ...holidayForm, dateFrom: e.target.value })} /></div>
+                  <div><label style={s.label}>To Date *</label><input style={s.input} type="date" value={holidayForm.dateTo || ""} onChange={e => setHolidayForm({ ...holidayForm, dateTo: e.target.value })} />
+                    {holidayForm.dateFrom && holidayForm.dateTo && (() => {
+                      const days = Math.ceil((new Date(holidayForm.dateTo) - new Date(holidayForm.dateFrom)) / (1000*60*60*24)) + 1;
+                      return days > 0 ? <div style={{ fontSize: ".68rem", color: "#7C3AED", marginTop: -6, fontWeight: 600 }}>{days} din ki chhutthi</div> : null;
+                    })()}
+                  </div>
+                </> : <div><label style={s.label}>Date *</label><input style={s.input} type="date" value={holidayForm.date || ""} onChange={e => setHolidayForm({ ...holidayForm, date: e.target.value })} /></div>}
+                <div><label style={s.label}>Holiday Title *</label><input style={s.input} placeholder="e.g. Republic Day, Holi, Diwali Break" value={holidayForm.title || ""} onChange={e => setHolidayForm({ ...holidayForm, title: e.target.value })} /></div>
                 <div><label style={s.label}>Type</label>
                   <select style={s.input} value={holidayForm.type || ""} onChange={e => setHolidayForm({ ...holidayForm, type: e.target.value })}>
                     <option value="">Select</option><option>National Holiday</option><option>Festival</option><option>Institute Holiday</option><option>Exam Break</option><option>Other</option>
@@ -4142,6 +4606,1105 @@ export default function AdminPanel() {
           </div>
         </>}
 
+        {/* ═══════════ EXAMS & TESTS TAB ═══════════ */}
+        {tab === "exams" && (() => {
+          const typeColors = { weekly: "#1349A8", monthly: "#7C3AED", halfyearly: "#D98D04", annual: "#DC2626", mock: "#059669", practice: "#0891B2" };
+          const typeLabels = { weekly: "Weekly", monthly: "Monthly", halfyearly: "Half-Yearly", annual: "Annual", mock: "Mock", practice: "Practice" };
+          let filteredExams = [...examList];
+          if (examClassFilter !== "all") filteredExams = filteredExams.filter(e => e.forClass === examClassFilter || e.forClass === "all");
+
+          return (
+            <div>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-file-alt" style={{ marginRight: 8, color: "#1349A8" }} />Exams & Test Management</h2>
+                  <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Create exams · Enter marks · View results · Weekly / Monthly / Half-yearly</p>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => { setShowExamForm(true); setExamEditId(null); setExamForm({ examDate: new Date().toISOString().split("T")[0], totalMarksPerSubject: 100, examType: "weekly" }); }} style={{ ...s.btnP, display: "flex", alignItems: "center", gap: 6 }}>
+                    <i className="fas fa-plus" /> Create Exam
+                  </button>
+                </div>
+              </div>
+
+              {/* View Toggle */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#E8EFF8", borderRadius: 10, padding: 4 }}>
+                {[{ id: "list", icon: "fa-list", label: "Exam List" }, { id: "results", icon: "fa-poll", label: "Results View" }].map(v => (
+                  <button key={v.id} onClick={() => setExamViewMode(v.id)} style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: "none", background: examViewMode === v.id ? "#fff" : "transparent", color: examViewMode === v.id ? "#1349A8" : "#6B7F99", fontSize: ".82rem", fontWeight: 700, cursor: "pointer", boxShadow: examViewMode === v.id ? "0 2px 8px rgba(0,0,0,.08)" : "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <i className={`fas ${v.icon}`} style={{ fontSize: ".75rem" }} />{v.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Create/Edit Exam Form */}
+              {showExamForm && (
+                <div style={{ ...s.card, border: "2px solid #1349A8" }}>
+                  <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 16, color: "#1349A8" }}><i className="fas fa-edit" style={{ marginRight: 8 }} />{examEditId ? "Edit" : "Create New"} Exam</h3>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+                    <div><label style={s.label}>Exam Title *</label><input style={s.input} placeholder="e.g. Weekly Test - Week 1 April" value={examForm.title || ""} onChange={e => setExamForm({ ...examForm, title: e.target.value })} /></div>
+                    <div><label style={s.label}>Exam Date *</label><input style={s.input} type="date" value={examForm.examDate || ""} onChange={e => setExamForm({ ...examForm, examDate: e.target.value })} /></div>
+                    <div><label style={s.label}>Exam Type *</label>
+                      <select style={s.input} value={examForm.examType || "weekly"} onChange={e => setExamForm({ ...examForm, examType: e.target.value })}>
+                        <option value="weekly">Weekly Test</option><option value="monthly">Monthly Test</option><option value="halfyearly">Half-Yearly Exam</option><option value="annual">Annual Exam</option><option value="mock">Mock Test</option><option value="practice">Practice Test</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                    <div><label style={s.label}>Total Marks Per Subject</label><input style={s.input} type="number" placeholder="100" value={examForm.totalMarksPerSubject || ""} onChange={e => setExamForm({ ...examForm, totalMarksPerSubject: Number(e.target.value) })} /></div>
+                    <div><label style={s.label}>For Class / Batch</label>
+                      <select style={s.input} value={examForm.forClass || "all"} onChange={e => setExamForm({ ...examForm, forClass: e.target.value })}>
+                        <option value="all">All Classes</option>
+                        {CLASS_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                      </select>
+                    </div>
+                    <div><label style={s.label}>Description (optional)</label><input style={s.input} placeholder="e.g. Chapter 1-5 Syllabus" value={examForm.description || ""} onChange={e => setExamForm({ ...examForm, description: e.target.value })} /></div>
+                  </div>
+                  <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-book" style={{ color: "#7C3AED" }} /> Exam Subjects (tick karo)</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    {["Physics", "Chemistry", "Maths", "Biology", "Science", "English", "Hindi", "Social Study", "Sanskrit", "Computer"].map(sub => (
+                      <label key={sub} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: ".82rem", fontWeight: 600, cursor: "pointer", padding: "6px 12px", borderRadius: 8, border: (examForm.subjects || []).includes(sub) ? "2px solid #1349A8" : "1px solid #D4DEF0", background: (examForm.subjects || []).includes(sub) ? "#EFF6FF" : "#fff" }}>
+                        <input type="checkbox" checked={(examForm.subjects || []).includes(sub)} onChange={e => { const c = examForm.subjects || []; setExamForm({ ...examForm, subjects: e.target.checked ? [...c, sub] : c.filter(x => x !== sub) }); }} style={{ accentColor: "#1349A8" }} />{sub}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={saveExam} disabled={saving} style={s.btnP}><i className="fas fa-save" style={{ marginRight: 6 }} />{saving ? "Saving..." : (examEditId ? "Update Exam" : "Create Exam")}</button>
+                    <button onClick={() => { setShowExamForm(false); setExamForm({}); setExamEditId(null); }} style={s.btnGray}>Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Class Filter */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+                <button onClick={() => setExamClassFilter("all")} style={{ padding: "6px 14px", borderRadius: 8, border: examClassFilter === "all" ? "2px solid #1349A8" : "1px solid #D4DEF0", background: examClassFilter === "all" ? "#EFF6FF" : "#fff", color: "#1349A8", fontSize: ".74rem", fontWeight: 700, cursor: "pointer" }}>All</button>
+                {CLASS_CATEGORIES.map(c => (
+                  <button key={c.id} onClick={() => setExamClassFilter(c.id)} style={{ padding: "6px 10px", borderRadius: 8, border: examClassFilter === c.id ? "2px solid " + c.color : "1px solid #D4DEF0", background: examClassFilter === c.id ? "#EFF6FF" : "#fff", color: c.color, fontSize: ".68rem", fontWeight: 600, cursor: "pointer" }}>{c.shortLabel}</button>
+                ))}
+              </div>
+
+              {/* Exam List View */}
+              {examViewMode === "list" && (
+                <div>
+                  {filteredExams.length === 0 ? (
+                    <div style={{ ...s.card, textAlign: "center", padding: 40 }}>
+                      <i className="fas fa-file-alt" style={{ fontSize: "2.5rem", color: "#B0C4DC", marginBottom: 12 }} />
+                      <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#4A5E78", marginBottom: 6 }}>No Exams Created Yet</h3>
+                      <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Click "Create Exam" to add your first test.</p>
+                    </div>
+                  ) : filteredExams.map(exam => {
+                    const catLabel = exam.forClass === "all" ? "All Classes" : (CLASS_CATEGORIES.find(c => c.id === exam.forClass)?.label || exam.forClass);
+                    return (
+                      <div key={exam.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 14, borderLeft: "4px solid " + (typeColors[exam.examType] || "#1349A8") }}>
+                        <div style={{ width: 50, height: 50, borderRadius: 12, background: (typeColors[exam.examType] || "#1349A8") + "15", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <i className="fas fa-file-alt" style={{ fontSize: "1.2rem", color: typeColors[exam.examType] || "#1349A8" }} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 700, fontSize: ".92rem" }}>{exam.title}</span>
+                            <span style={s.badge(typeColors[exam.examType] || "#1349A8", (typeColors[exam.examType] || "#1349A8") + "15")}>{typeLabels[exam.examType] || exam.examType}</span>
+                            <span style={s.badge("#6B7F99", "#F0F4FA")}>{catLabel}</span>
+                          </div>
+                          <div style={{ fontSize: ".76rem", color: "#4A5E78", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                            <span><i className="fas fa-calendar" style={{ marginRight: 4, color: "#6B7F99" }} />{exam.examDate}</span>
+                            <span><i className="fas fa-star" style={{ marginRight: 4, color: "#6B7F99" }} />{exam.totalMarksPerSubject || 100} marks/subject</span>
+                            <span><i className="fas fa-book" style={{ marginRight: 4, color: "#6B7F99" }} />{(exam.subjects || []).join(", ") || "No subjects"}</span>
+                          </div>
+                          {exam.description && <div style={{ fontSize: ".72rem", color: "#6B7F99", marginTop: 2 }}>{exam.description}</div>}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                          <button onClick={() => openMarksEntry(exam)} style={{ ...s.btnG, display: "flex", alignItems: "center", gap: 4 }}><i className="fas fa-pen" /> Marks</button>
+                          <button onClick={() => { setExamEditId(exam.id); setExamForm({ ...exam }); setShowExamForm(true); }} style={s.btnO}><i className="fas fa-edit" /></button>
+                          <button onClick={() => deleteExam(exam.id)} style={s.btnD}><i className="fas fa-trash" /></button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Results View */}
+              {examViewMode === "results" && (
+                <div>
+                  {filteredExams.length === 0 ? (
+                    <div style={{ ...s.card, textAlign: "center", padding: 30, color: "#6B7F99" }}>No exams found. Create an exam first.</div>
+                  ) : filteredExams.map(exam => {
+                    let stList = students.filter(x => x.status === "active");
+                    if (exam.forClass !== "all") stList = filterByBatch(stList, exam.forClass);
+                    const subjects = exam.subjects || [];
+                    return (
+                      <div key={exam.id} style={{ ...s.card, padding: 0, overflow: "auto", marginBottom: 16 }}>
+                        <div style={{ padding: "14px 18px", borderBottom: "2px solid #E2EAF4", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                          <h3 style={{ fontSize: ".95rem", fontWeight: 700, color: "#0B1826", margin: 0 }}><i className="fas fa-poll" style={{ marginRight: 8, color: "#1349A8" }} />{exam.title} — {exam.examDate}</h3>
+                          <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>{(CLASS_CATEGORIES.find(c => c.id === exam.forClass)?.label || "All Classes")} · {exam.totalMarksPerSubject || 100} marks/subject</span>
+                        </div>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".76rem" }}>
+                          <thead><tr style={{ background: "#F0F4FA" }}>
+                            <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 30 }}>#</th>
+                            <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 140 }}>Student</th>
+                            <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Class</th>
+                            {subjects.map(sub => <th key={sub} style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 50 }}>{sub}</th>)}
+                            <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 800, borderBottom: "2px solid #D4DEF0", color: "#1349A8", minWidth: 50 }}>Total</th>
+                            <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 800, borderBottom: "2px solid #D4DEF0", color: "#059669", minWidth: 40 }}>%</th>
+                          </tr></thead>
+                          <tbody>
+                            {stList.length === 0 ? <tr><td colSpan={subjects.length + 5} style={{ padding: 30, textAlign: "center", color: "#6B7F99" }}>No students for this class</td></tr>
+                            : stList.map((st, idx) => {
+                              const stMarks = marksData[st.id] || {};
+                              const totalObtained = subjects.reduce((sm, sub) => sm + (Number(stMarks[sub]) || 0), 0);
+                              const maxTotal = subjects.length * (exam.totalMarksPerSubject || 100);
+                              const pct = maxTotal > 0 ? Math.round((totalObtained / maxTotal) * 100) : 0;
+                              return (
+                                <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                                  <td style={{ padding: "8px 10px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                                  <td style={{ padding: "8px 10px", fontWeight: 600 }}>{st.studentName}</td>
+                                  <td style={{ padding: "8px 8px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
+                                  {subjects.map(sub => <td key={sub} style={{ padding: "6px 4px", textAlign: "center", fontWeight: 600, color: stMarks[sub] ? "#0B1826" : "#B0C4DC" }}>{stMarks[sub] || "—"}</td>)}
+                                  <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: "#1349A8" }}>{totalObtained > 0 ? totalObtained : "—"}</td>
+                                  <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 800, color: pct >= 75 ? "#16A34A" : pct >= 50 ? "#D98D04" : pct > 0 ? "#DC2626" : "#B0C4DC" }}>{totalObtained > 0 ? pct + "%" : "—"}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Marks Entry Modal */}
+              {examMarksModal && (() => {
+                const exam = examMarksModal;
+                const subjects = exam.subjects || [];
+                let stList = students.filter(x => x.status === "active");
+                if (exam.forClass !== "all") stList = filterByBatch(stList, exam.forClass);
+                if (examSearch.trim()) { const q = examSearch.toLowerCase(); stList = stList.filter(x => x.studentName?.toLowerCase().includes(q)); }
+                return (
+                  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 20, overflowY: "auto" }} onClick={() => setExamMarksModal(null)}>
+                    <div style={{ background: "#fff", borderRadius: 16, padding: 24, maxWidth: 900, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.2)", marginTop: 20, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+                        <div>
+                          <h3 style={{ fontSize: "1.05rem", fontWeight: 800, marginBottom: 2 }}><i className="fas fa-pen" style={{ marginRight: 8, color: "#16A34A" }} />Enter Marks — {exam.title}</h3>
+                          <p style={{ fontSize: ".76rem", color: "#6B7F99", margin: 0 }}>{exam.examDate} · {exam.totalMarksPerSubject || 100} marks/subject · {(CLASS_CATEGORIES.find(c => c.id === exam.forClass)?.label || "All Classes")}</p>
+                        </div>
+                        <button onClick={() => setExamMarksModal(null)} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid #D4DEF0", background: "#F8FAFD", color: "#6B7F99", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><i className="fas fa-times" /></button>
+                      </div>
+                      <input style={{ ...s.input, marginBottom: 12 }} placeholder="Search student name..." value={examSearch} onChange={e => setExamSearch(e.target.value)} />
+                      <div style={{ overflow: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem" }}>
+                          <thead><tr style={{ background: "#F0F4FA" }}>
+                            <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                            <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 140 }}>Student</th>
+                            <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Class</th>
+                            {subjects.map(sub => <th key={sub} style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 65 }}>{sub}<br/><span style={{ fontSize: ".6rem", color: "#6B7F99" }}>/{exam.totalMarksPerSubject || 100}</span></th>)}
+                            <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", minWidth: 60 }}>Save</th>
+                          </tr></thead>
+                          <tbody>
+                            {stList.length === 0 ? <tr><td colSpan={subjects.length + 4} style={{ padding: 30, textAlign: "center", color: "#6B7F99" }}>No students found</td></tr>
+                            : stList.map((st, idx) => {
+                              const stMarks = marksData[st.id] || {};
+                              return (
+                                <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                                  <td style={{ padding: "6px 10px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                                  <td style={{ padding: "6px 10px", fontWeight: 600, fontSize: ".82rem" }}>{st.studentName}</td>
+                                  <td style={{ padding: "6px 8px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
+                                  {subjects.map(sub => (
+                                    <td key={sub} style={{ padding: "4px 4px", textAlign: "center" }}>
+                                      <input type="number" min="0" max={exam.totalMarksPerSubject || 100} placeholder="—" value={stMarks[sub] || ""} onChange={e => { setMarksData(prev => ({ ...prev, [st.id]: { ...prev[st.id], [sub]: e.target.value } })); }} style={{ width: 50, textAlign: "center", border: "1.5px solid #C0D0E8", borderRadius: 6, padding: "5px 4px", fontSize: ".78rem", outline: "none" }} />
+                                    </td>
+                                  ))}
+                                  <td style={{ padding: "4px 4px", textAlign: "center" }}>
+                                    <button onClick={() => { const m = { ...(marksData[st.id] || {}) }; delete m._docId; saveStudentMarks(exam.id, st.id, m, exam.title); }} disabled={marksSaving} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".68rem", fontWeight: 700, cursor: "pointer" }}><i className="fas fa-check" /></button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div style={{ textAlign: "center", marginTop: 16 }}>
+                        <button onClick={() => setExamMarksModal(null)} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#1349A8", color: "#fff", fontSize: ".82rem", fontWeight: 700, cursor: "pointer" }}>Close</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Tips */}
+              <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
+                <div>
+                  <strong>Exam & Test Tips:</strong><br />
+                  • "Create Exam" se naya test banao — Weekly, Monthly, Half-Yearly, Mock sab types hain<br />
+                  • Subjects tick karo jo exam me hain — marks entry me wahi dikhenge<br />
+                  • "Marks" button se har student ke marks enter karo<br />
+                  • "Results View" se class-wise result dekho — percentage auto-calculate hoti hai<br />
+                  • Ye marks Student App aur Parent App me dikhenge automatically
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+
+        {/* ═══════════ PERFORMANCE TRACKER TAB ═══════════ */}
+        {tab === "performance" && (() => {
+          let perfStudentList = students.filter(x => x.status === "active");
+          if (perfClassFilter !== "all") perfStudentList = filterByBatch(perfStudentList, perfClassFilter);
+          if (perfSearch.trim()) { const q = perfSearch.toLowerCase(); perfStudentList = perfStudentList.filter(x => x.studentName?.toLowerCase().includes(q)); }
+
+          // AI Quiz stats helper
+          const getQuizStats = (quizArr) => {
+            if (!quizArr || quizArr.length === 0) return { total: 0, correct: 0, wrong: 0, accuracy: 0, subjects: {}, recentTopics: [] };
+            let correct = 0, wrong = 0;
+            const subjects = {};
+            quizArr.forEach(q => {
+              if (q.isCorrect) correct++; else wrong++;
+              const sub = q.subject || "General";
+              if (!subjects[sub]) subjects[sub] = { total: 0, correct: 0 };
+              subjects[sub].total++;
+              if (q.isCorrect) subjects[sub].correct++;
+            });
+            return { total: quizArr.length, correct, wrong, accuracy: Math.round((correct / quizArr.length) * 100), subjects, recentTopics: quizArr.slice(0, 5) };
+          };
+
+          // AI Doubt stats helper
+          const getDoubtStats = (doubtArr) => {
+            if (!doubtArr || doubtArr.length === 0) return { total: 0, subjects: {}, recentDoubts: [] };
+            const subjects = {};
+            doubtArr.forEach(d => {
+              const sub = d.subject || "General";
+              if (!subjects[sub]) subjects[sub] = 0;
+              subjects[sub]++;
+            });
+            return { total: doubtArr.length, subjects, recentDoubts: doubtArr.slice(0, 10) };
+          };
+
+          return (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-chart-line" style={{ marginRight: 8, color: "#7C3AED" }} />Student Performance Tracker</h2>
+                  <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Marks graph · Exam history · AI Quiz tracking · Doubt analysis</p>
+                </div>
+              </div>
+
+              {/* Class Filter */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+                <button onClick={() => setPerfClassFilter("all")} style={{ padding: "6px 14px", borderRadius: 8, border: perfClassFilter === "all" ? "2px solid #7C3AED" : "1px solid #D4DEF0", background: perfClassFilter === "all" ? "#FAF5FF" : "#fff", color: "#7C3AED", fontSize: ".74rem", fontWeight: 700, cursor: "pointer" }}>All</button>
+                {CLASS_CATEGORIES.map(c => (
+                  <button key={c.id} onClick={() => setPerfClassFilter(c.id)} style={{ padding: "6px 10px", borderRadius: 8, border: perfClassFilter === c.id ? "2px solid " + c.color : "1px solid #D4DEF0", background: perfClassFilter === c.id ? "#FAF5FF" : "#fff", color: c.color, fontSize: ".68rem", fontWeight: 600, cursor: "pointer" }}>{c.shortLabel}</button>
+                ))}
+              </div>
+
+              <input style={{ ...s.input, marginBottom: 16 }} placeholder="Search student name..." value={perfSearch} onChange={e => setPerfSearch(e.target.value)} />
+
+              {/* Student List */}
+              {!perfStudent ? (
+                <div>
+                  {perfStudentList.length === 0 ? (
+                    <div style={{ ...s.card, textAlign: "center", padding: 40 }}>
+                      <i className="fas fa-chart-line" style={{ fontSize: "2.5rem", color: "#B0C4DC", marginBottom: 12 }} />
+                      <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#4A5E78" }}>No Students Found</h3>
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+                      {perfStudentList.map(st => (
+                        <div key={st.id} onClick={() => loadStudentPerformance(st)} style={{ ...s.card, cursor: "pointer", display: "flex", alignItems: "center", gap: 12, transition: "all .2s", border: "1px solid #D4DEF0" }}>
+                          <div style={{ width: 44, height: 44, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#7C3AED,#A78BFA)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {st.photo && st.photo.startsWith("http") ? <img src={st.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: "1rem" }}>{st.studentName?.charAt(0)}</span>}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 700, fontSize: ".88rem", color: "#0B1826" }}>{st.studentName}</div>
+                            <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Class {st.class} · {st.board || ""} · {st.medium || ""}</div>
+                          </div>
+                          <i className="fas fa-chevron-right" style={{ color: "#B0C4DC" }} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  {/* Back + Student Info */}
+                  <div style={{ ...s.card, display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+                    <button onClick={() => { setPerfStudent(null); setPerfExamData([]); setPerfQuizData([]); setPerfDoubtData([]); setPerfTab("overview"); }} style={{ ...s.btnGray, flexShrink: 0 }}><i className="fas fa-arrow-left" style={{ marginRight: 6 }} />Back</button>
+                    <div style={{ width: 50, height: 50, borderRadius: 12, overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#7C3AED,#A78BFA)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {perfStudent.photo && perfStudent.photo.startsWith("http") ? <img src={perfStudent.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>{perfStudent.studentName?.charAt(0)}</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: "1.05rem" }}>{perfStudent.studentName}</div>
+                      <div style={{ fontSize: ".78rem", color: "#6B7F99" }}>Class {perfStudent.class} · {perfStudent.board || ""} · {perfStudent.medium || ""} · RFID: {perfStudent.rfidCode || "N/A"}</div>
+                    </div>
+                  </div>
+
+                  {perfLoading ? (
+                    <div style={{ textAlign: "center", padding: 40, color: "#6B7F99" }}><i className="fas fa-spinner fa-spin" style={{ fontSize: "1.5rem", marginBottom: 8 }} /><p>Loading performance data...</p></div>
+                  ) : (
+                    <div>
+                      {/* Sub-Tab Navigation */}
+                      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#E8EFF8", borderRadius: 10, padding: 4 }}>
+                        {[
+                          { id: "overview", icon: "fa-th-large", label: "Overview" },
+                          { id: "exams", icon: "fa-file-alt", label: "Exam Results" },
+                          { id: "quizzes", icon: "fa-robot", label: "AI Quiz (" + perfQuizData.length + ")" },
+                          { id: "doubts", icon: "fa-question-circle", label: "AI Doubts (" + perfDoubtData.length + ")" },
+                        ].map(v => (
+                          <button key={v.id} onClick={() => setPerfTab(v.id)} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: "none", background: perfTab === v.id ? "#fff" : "transparent", color: perfTab === v.id ? "#7C3AED" : "#6B7F99", fontSize: ".76rem", fontWeight: 700, cursor: "pointer", boxShadow: perfTab === v.id ? "0 2px 8px rgba(0,0,0,.08)" : "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
+                            <i className={"fas " + v.icon} style={{ fontSize: ".7rem" }} />{v.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* ═══ OVERVIEW TAB ═══ */}
+                      {perfTab === "overview" && (
+                        <div>
+                          {/* Summary Stats Cards */}
+                          {(() => {
+                            const totalExams = perfExamData.length;
+                            const avgPct = totalExams > 0 ? Math.round(perfExamData.reduce((sum, d) => {
+                              const exam = examList.find(e => e.id === d.examId);
+                              const subs = exam?.subjects || [];
+                              const maxT = subs.length * (exam?.totalMarksPerSubject || 100);
+                              return sum + (maxT > 0 ? (d.totalMarks / maxT) * 100 : 0);
+                            }, 0) / totalExams) : 0;
+                            const qStats = getQuizStats(perfQuizData);
+                            const dStats = getDoubtStats(perfDoubtData);
+                            return (
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10, marginBottom: 20 }}>
+                                <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#1349A8" }}>{totalExams}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Total Exams</div></div>
+                                <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: avgPct >= 75 ? "#16A34A" : avgPct >= 50 ? "#D98D04" : "#DC2626" }}>{avgPct}%</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Avg Exam Score</div></div>
+                                <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#0891B2" }}>{qStats.total}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>AI Quizzes Done</div></div>
+                                <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: qStats.accuracy >= 70 ? "#16A34A" : qStats.accuracy >= 40 ? "#D98D04" : "#DC2626" }}>{qStats.accuracy}%</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Quiz Accuracy</div></div>
+                                <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#7C3AED" }}>{dStats.total}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Doubts Asked</div></div>
+                                <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#059669" }}>{Object.keys(dStats.subjects).length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Subjects Covered</div></div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Performance Graph */}
+                          {perfExamData.length > 0 && (
+                            <div style={{ ...s.card, marginBottom: 16 }}>
+                              <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-chart-bar" style={{ marginRight: 8, color: "#7C3AED" }} />Exam Performance Trend</h3>
+                              <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 180, padding: "0 10px", borderBottom: "2px solid #E8EFF8" }}>
+                                {perfExamData.slice(0, 12).reverse().map((d, i) => {
+                                  const exam = examList.find(e => e.id === d.examId);
+                                  const subs = exam?.subjects || [];
+                                  const maxT = subs.length * (exam?.totalMarksPerSubject || 100);
+                                  const pct = maxT > 0 ? Math.round((d.totalMarks / maxT) * 100) : 0;
+                                  const barColor = pct >= 75 ? "#16A34A" : pct >= 50 ? "#D98D04" : "#DC2626";
+                                  return (
+                                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                                      <div style={{ fontSize: ".62rem", fontWeight: 700, color: barColor }}>{pct}%</div>
+                                      <div style={{ width: "100%", maxWidth: 40, height: Math.max(pct * 1.5, 8) + "px", background: "linear-gradient(180deg, " + barColor + ", " + barColor + "88)", borderRadius: "6px 6px 0 0", transition: "height .3s" }} title={(d.examTitle || "") + ": " + pct + "%"} />
+                                      <div style={{ fontSize: ".5rem", color: "#6B7F99", textAlign: "center", lineHeight: 1.2, maxWidth: 50, overflow: "hidden" }}>{(d.examTitle || "").slice(0, 8)}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* AI Quiz Accuracy by Subject (Visual Bars) */}
+                          {perfQuizData.length > 0 && (() => {
+                            const qStats = getQuizStats(perfQuizData);
+                            const subEntries = Object.entries(qStats.subjects).sort((a, b) => b[1].total - a[1].total);
+                            return (
+                              <div style={{ ...s.card, marginBottom: 16 }}>
+                                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-robot" style={{ marginRight: 8, color: "#0891B2" }} />AI Quiz — Subject-wise Accuracy</h3>
+                                {subEntries.map(([sub, data]) => {
+                                  const acc = Math.round((data.correct / data.total) * 100);
+                                  const barColor = acc >= 70 ? "#16A34A" : acc >= 40 ? "#D98D04" : "#DC2626";
+                                  return (
+                                    <div key={sub} style={{ marginBottom: 12 }}>
+                                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                                        <span style={{ fontSize: ".78rem", fontWeight: 600 }}>{sub}</span>
+                                        <span style={{ fontSize: ".72rem", color: barColor, fontWeight: 700 }}>{data.correct}/{data.total} correct ({acc}%)</span>
+                                      </div>
+                                      <div style={{ width: "100%", height: 10, background: "#E8EFF8", borderRadius: 99, overflow: "hidden" }}>
+                                        <div style={{ width: acc + "%", height: "100%", background: "linear-gradient(90deg, " + barColor + ", " + barColor + "CC)", borderRadius: 99, transition: "width .5s" }} />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+
+                          {/* Recent AI Doubts Summary */}
+                          {perfDoubtData.length > 0 && (() => {
+                            const dStats = getDoubtStats(perfDoubtData);
+                            const subEntries = Object.entries(dStats.subjects).sort((a, b) => b[1] - a[1]);
+                            return (
+                              <div style={{ ...s.card, marginBottom: 16 }}>
+                                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-question-circle" style={{ marginRight: 8, color: "#7C3AED" }} />Doubt Analysis — Subjects</h3>
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  {subEntries.map(([sub, count]) => (
+                                    <div key={sub} style={{ padding: "8px 16px", borderRadius: 10, background: "#FAF5FF", border: "1px solid #E9D5FF", display: "flex", alignItems: "center", gap: 8 }}>
+                                      <span style={{ fontSize: "1.1rem", fontWeight: 800, color: "#7C3AED" }}>{count}</span>
+                                      <span style={{ fontSize: ".78rem", fontWeight: 600, color: "#4A5E78" }}>{sub}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      {/* ═══ EXAM RESULTS TAB ═══ */}
+                      {perfTab === "exams" && (
+                        <div style={{ ...s.card }}>
+                          <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-list-ol" style={{ marginRight: 8, color: "#1349A8" }} />Exam-wise Results</h3>
+                          {perfExamData.length === 0 ? (
+                            <div style={{ textAlign: "center", padding: 30, color: "#6B7F99" }}>No exam results found yet.</div>
+                          ) : (
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem" }}>
+                              <thead><tr style={{ background: "#F0F4FA" }}>
+                                <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                                <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Exam</th>
+                                <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Type</th>
+                                <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Date</th>
+                                <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Marks</th>
+                                <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>%</th>
+                                <th style={{ padding: "8px 8px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Subject-wise</th>
+                              </tr></thead>
+                              <tbody>
+                                {perfExamData.map((d, idx) => {
+                                  const exam = examList.find(e => e.id === d.examId);
+                                  const subs = exam?.subjects || [];
+                                  const maxT = subs.length * (exam?.totalMarksPerSubject || 100);
+                                  const pct = maxT > 0 ? Math.round((d.totalMarks / maxT) * 100) : 0;
+                                  const tLabels = { weekly: "Weekly", monthly: "Monthly", halfyearly: "Half-Yearly", annual: "Annual", mock: "Mock", practice: "Practice" };
+                                  return (
+                                    <tr key={d.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                                      <td style={{ padding: "8px 10px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                                      <td style={{ padding: "8px 10px", fontWeight: 600 }}>{d.examTitle || exam?.title || "—"}</td>
+                                      <td style={{ padding: "8px 8px", textAlign: "center" }}><span style={s.badge("#7C3AED", "#FAF5FF")}>{tLabels[exam?.examType] || "—"}</span></td>
+                                      <td style={{ padding: "8px 8px", textAlign: "center", fontSize: ".72rem" }}>{exam?.examDate || "—"}</td>
+                                      <td style={{ padding: "8px 8px", textAlign: "center", fontWeight: 800, color: "#1349A8" }}>{d.totalMarks}/{maxT}</td>
+                                      <td style={{ padding: "8px 8px", textAlign: "center", fontWeight: 800, color: pct >= 75 ? "#16A34A" : pct >= 50 ? "#D98D04" : "#DC2626" }}>{pct}%</td>
+                                      <td style={{ padding: "8px 8px", fontSize: ".68rem" }}>{d.marks ? Object.entries(d.marks).map(([sub, m]) => sub + ": " + m).join(" · ") : "—"}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ═══ AI QUIZZES TAB ═══ */}
+                      {perfTab === "quizzes" && (() => {
+                        const qStats = getQuizStats(perfQuizData);
+                        return (
+                          <div>
+                            {/* Quiz Stats */}
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10, marginBottom: 16 }}>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#0891B2" }}>{qStats.total}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Total Questions</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#16A34A" }}>{qStats.correct}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Correct</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#DC2626" }}>{qStats.wrong}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Wrong</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: qStats.accuracy >= 70 ? "#16A34A" : "#D98D04" }}>{qStats.accuracy}%</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Accuracy</div></div>
+                            </div>
+
+                            {/* Quiz Accuracy Visual Meter */}
+                            {qStats.total > 0 && (
+                              <div style={{ ...s.card, marginBottom: 16 }}>
+                                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-bullseye" style={{ marginRight: 8, color: "#0891B2" }} />Accuracy Meter</h3>
+                                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                                  <div style={{ position: "relative", width: 100, height: 100 }}>
+                                    <svg viewBox="0 0 36 36" style={{ width: 100, height: 100, transform: "rotate(-90deg)" }}>
+                                      <circle cx="18" cy="18" r="15.915" fill="none" stroke="#E8EFF8" strokeWidth="3" />
+                                      <circle cx="18" cy="18" r="15.915" fill="none" stroke={qStats.accuracy >= 70 ? "#16A34A" : qStats.accuracy >= 40 ? "#D98D04" : "#DC2626"} strokeWidth="3" strokeDasharray={qStats.accuracy + " " + (100 - qStats.accuracy)} strokeLinecap="round" />
+                                    </svg>
+                                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.2rem", fontWeight: 800, color: "#0B1826" }}>{qStats.accuracy}%</div>
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ marginBottom: 6, fontSize: ".82rem" }}><span style={{ color: "#16A34A", fontWeight: 700 }}>{qStats.correct}</span> correct out of <span style={{ fontWeight: 700 }}>{qStats.total}</span></div>
+                                    <div style={{ fontSize: ".78rem", color: "#6B7F99" }}>
+                                      {qStats.accuracy >= 80 ? "Excellent! Student is performing very well in AI quizzes." :
+                                       qStats.accuracy >= 60 ? "Good progress. Some areas need improvement." :
+                                       qStats.accuracy >= 40 ? "Average. Needs more practice and focus." :
+                                       "Needs attention. Student struggling with quiz questions."}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Subject-wise Breakdown */}
+                            {Object.keys(qStats.subjects).length > 0 && (
+                              <div style={{ ...s.card, marginBottom: 16 }}>
+                                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-book" style={{ marginRight: 8, color: "#7C3AED" }} />Subject-wise Quiz Performance</h3>
+                                {Object.entries(qStats.subjects).sort((a, b) => b[1].total - a[1].total).map(([sub, data]) => {
+                                  const acc = Math.round((data.correct / data.total) * 100);
+                                  const barColor = acc >= 70 ? "#16A34A" : acc >= 40 ? "#D98D04" : "#DC2626";
+                                  return (
+                                    <div key={sub} style={{ marginBottom: 14 }}>
+                                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                                        <span style={{ fontSize: ".82rem", fontWeight: 600 }}>{sub}</span>
+                                        <span style={{ fontSize: ".74rem", color: barColor, fontWeight: 700 }}>{data.correct}/{data.total} ({acc}%)</span>
+                                      </div>
+                                      <div style={{ width: "100%", height: 12, background: "#E8EFF8", borderRadius: 99, overflow: "hidden" }}>
+                                        <div style={{ width: acc + "%", height: "100%", background: "linear-gradient(90deg, " + barColor + ", " + barColor + "CC)", borderRadius: 99, transition: "width .5s" }} />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {/* Recent Quiz Questions */}
+                            <div style={{ ...s.card }}>
+                              <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-history" style={{ marginRight: 8, color: "#1349A8" }} />Recent Quiz Questions</h3>
+                              {perfQuizData.length === 0 ? (
+                                <div style={{ textAlign: "center", padding: 30, color: "#6B7F99" }}>No AI quiz data yet. Student hasn't used AI Quiz feature.</div>
+                              ) : perfQuizData.slice(0, 20).map((q, idx) => (
+                                <div key={q.id} style={{ padding: "12px 14px", borderBottom: "1px solid #E8EFF8", display: "flex", gap: 12, alignItems: "flex-start" }}>
+                                  <div style={{ width: 28, height: 28, borderRadius: 8, background: q.isCorrect ? "#F0FDF4" : "#FEF2F2", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                    <i className={"fas " + (q.isCorrect ? "fa-check" : "fa-times")} style={{ fontSize: ".72rem", color: q.isCorrect ? "#16A34A" : "#DC2626" }} />
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: ".82rem", fontWeight: 600, marginBottom: 3 }}>{q.question || "Quiz Question"}</div>
+                                    <div style={{ fontSize: ".72rem", color: "#6B7F99", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                      <span style={s.badge("#0891B2", "#ECFEFF")}>{q.subject || "General"}</span>
+                                      {q.userAnswer && <span>Answer: <strong style={{ color: q.isCorrect ? "#16A34A" : "#DC2626" }}>{q.userAnswer}</strong></span>}
+                                      {q.correctAnswer && !q.isCorrect && <span>Correct: <strong style={{ color: "#16A34A" }}>{q.correctAnswer}</strong></span>}
+                                      {q.createdAt?.toDate && <span>{q.createdAt.toDate().toLocaleDateString("en-IN")}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* ═══ AI DOUBTS TAB ═══ */}
+                      {perfTab === "doubts" && (() => {
+                        const dStats = getDoubtStats(perfDoubtData);
+                        return (
+                          <div>
+                            {/* Doubt Stats */}
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#7C3AED" }}>{dStats.total}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Total Doubts</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#059669" }}>{Object.keys(dStats.subjects).length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Subjects</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#1349A8" }}>{perfDoubtData.filter(d => d.hasImage).length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>With Images</div></div>
+                            </div>
+
+                            {/* Doubt Subject Distribution */}
+                            {Object.keys(dStats.subjects).length > 0 && (
+                              <div style={{ ...s.card, marginBottom: 16 }}>
+                                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-chart-pie" style={{ marginRight: 8, color: "#7C3AED" }} />Doubt Distribution by Subject</h3>
+                                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                  {Object.entries(dStats.subjects).sort((a, b) => b[1] - a[1]).map(([sub, count]) => {
+                                    const pct = Math.round((count / dStats.total) * 100);
+                                    const colors = ["#7C3AED", "#1349A8", "#059669", "#D98D04", "#DC2626", "#0891B2", "#BE185D"];
+                                    const ci = Object.keys(dStats.subjects).indexOf(sub) % colors.length;
+                                    return (
+                                      <div key={sub} style={{ flex: "1 1 200px", padding: 14, borderRadius: 12, border: "1px solid #E8EFF8", background: "#FAFCFE" }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                                          <span style={{ fontSize: ".82rem", fontWeight: 700, color: colors[ci] }}>{sub}</span>
+                                          <span style={{ fontSize: ".74rem", fontWeight: 700, color: "#4A5E78" }}>{count} ({pct}%)</span>
+                                        </div>
+                                        <div style={{ width: "100%", height: 8, background: "#E8EFF8", borderRadius: 99, overflow: "hidden" }}>
+                                          <div style={{ width: pct + "%", height: "100%", background: colors[ci], borderRadius: 99 }} />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Recent Doubts List */}
+                            <div style={{ ...s.card }}>
+                              <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-history" style={{ marginRight: 8, color: "#7C3AED" }} />Recent Doubts Asked</h3>
+                              {perfDoubtData.length === 0 ? (
+                                <div style={{ textAlign: "center", padding: 30, color: "#6B7F99" }}>No doubt history yet. Student hasn't used AI Doubt Solver.</div>
+                              ) : perfDoubtData.slice(0, 25).map((d, idx) => (
+                                <div key={d.id} style={{ padding: "12px 16px", borderBottom: "1px solid #E8EFF8", display: "flex", gap: 12, alignItems: "center" }}>
+                                  <div style={{ width: 28, height: 28, borderRadius: 8, background: "#FAF5FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: ".72rem", fontWeight: 700, color: "#7C3AED" }}>{idx + 1}</div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: ".84rem", fontWeight: 600, color: "#0B1826" }}>{d.messages?.[0]?.content || d.question || "No question"}</div>
+                                    <div style={{ fontSize: ".7rem", color: "#6B7F99", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
+                                      <span style={s.badge("#7C3AED", "#FAF5FF")}>{d.subject || "General"}</span>
+                                      {d.language && <span style={s.badge("#0891B2", "#ECFEFF")}>{d.language}</span>}
+                                      {d.hasImage && <span style={s.badge("#D98D04", "#FFFBEB")}><i className="fas fa-image" style={{ marginRight: 3 }} />Image</span>}
+                                      {d.createdAt?.toDate && <span>{d.createdAt.toDate().toLocaleDateString("en-IN")} {d.createdAt.toDate().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tips */}
+              <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
+                <div>
+                  <strong>Performance Tracker Tips:</strong><br />
+                  • Student pe click karo — Overview, Exam Results, AI Quiz aur Doubts sab dikhega<br />
+                  • AI Quiz tab me dekho kitne questions sahi kiye — subject-wise accuracy bhi hai<br />
+                  • AI Doubts tab me dekho student kya sawaal puchh raha hai — weak areas identify karo<br />
+                  • Circular meter se quiz accuracy instantly samjho<br />
+                  • Bar graphs se exam trend aur subject-wise quiz performance dekho
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ═══════════ ONLINE TESTS TAB ═══════════ */}
+        {tab === "online_tests" && <>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-laptop" style={{ marginRight: 8, color: "#7C3AED" }} />Online Test Management</h2>
+              <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Create tests · Manual / AI / PDF questions · Students ghar baithe Student App me test denge</p>
+            </div>
+            <button onClick={() => { setShowOtForm(true); setOtEditId(null); setOtStep(1); setOtQuestions([]); setOtForm({ testType: "practice", duration: 30, isActive: true }); }} style={{ ...s.btnP, display: "flex", alignItems: "center", gap: 6 }}>
+              <i className="fas fa-plus" /> Create Online Test
+            </button>
+          </div>
+
+          {/* ═══ TEST CREATION FORM ═══ */}
+          {showOtForm && <div style={{ ...s.card, border: "2px solid #7C3AED" }}>
+            {/* Step Indicator */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 20, alignItems: "center" }}>
+              <div onClick={() => setOtStep(1)} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "8px 16px", borderRadius: 8, background: otStep === 1 ? "#7C3AED" : "#F0F4FA", color: otStep === 1 ? "#fff" : "#6B7F99", fontWeight: 700, fontSize: ".82rem" }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", background: otStep === 1 ? "#fff" : "#D4DEF0", color: otStep === 1 ? "#7C3AED" : "#6B7F99", display: "flex", alignItems: "center", justifyContent: "center", fontSize: ".7rem", fontWeight: 800 }}>1</span>
+                Test Info
+              </div>
+              <i className="fas fa-chevron-right" style={{ color: "#B0C4DC", fontSize: ".6rem" }} />
+              <div onClick={() => { if (otForm.title && otForm.subject && otForm.forClass) setOtStep(2); else showMsg("Pehle Step 1 fill karo!"); }} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "8px 16px", borderRadius: 8, background: otStep === 2 ? "#7C3AED" : "#F0F4FA", color: otStep === 2 ? "#fff" : "#6B7F99", fontWeight: 700, fontSize: ".82rem" }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", background: otStep === 2 ? "#fff" : "#D4DEF0", color: otStep === 2 ? "#7C3AED" : "#6B7F99", display: "flex", alignItems: "center", justifyContent: "center", fontSize: ".7rem", fontWeight: 800 }}>2</span>
+                Questions ({otQuestions.length})
+              </div>
+            </div>
+
+            {/* ═══ STEP 1: Test Info ═══ */}
+            {otStep === 1 && <>
+              <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 16, color: "#7C3AED" }}><i className="fas fa-info-circle" style={{ marginRight: 8 }} />Test Information</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+                <div><label style={s.label}>Test Title *</label><input style={s.input} placeholder="e.g. Physics Weekly Test - Motion" value={otForm.title || ""} onChange={e => setOtForm({ ...otForm, title: e.target.value })} /></div>
+                <div><label style={s.label}>Subject *</label>
+                  <select style={s.input} value={otForm.subject || ""} onChange={e => setOtForm({ ...otForm, subject: e.target.value })}>
+                    <option value="">Select Subject</option>
+                    {["Physics", "Chemistry", "Maths", "Biology", "Science", "English", "Hindi", "Social Study", "Sanskrit", "Computer"].map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                  </select>
+                </div>
+                <div><label style={s.label}>Test Type</label>
+                  <select style={s.input} value={otForm.testType || "practice"} onChange={e => setOtForm({ ...otForm, testType: e.target.value })}>
+                    <option value="practice">Practice Test</option><option value="weekly">Weekly Test</option><option value="monthly">Monthly Test</option><option value="mock">Mock Test</option><option value="chapter">Chapter Test</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div><label style={s.label}>For Class / Batch *</label>
+                  <select style={s.input} value={otForm.forClass || ""} onChange={e => setOtForm({ ...otForm, forClass: e.target.value })}>
+                    <option value="">Select Class</option><option value="all">All Classes</option>
+                    {CLASS_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div><label style={s.label}>Board</label>
+                  <select style={s.input} value={otForm.board || ""} onChange={e => setOtForm({ ...otForm, board: e.target.value })}>
+                    <option value="">Select</option><option>CG Board</option><option>CBSE</option><option>ICSE</option>
+                  </select>
+                </div>
+                <div><label style={s.label}>Medium</label>
+                  <select style={s.input} value={otForm.medium || ""} onChange={e => setOtForm({ ...otForm, medium: e.target.value })}>
+                    <option value="">Select</option><option>Hindi</option><option>English</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+                <div><label style={s.label}>Duration (minutes)</label><input style={s.input} type="number" placeholder="30" value={otForm.duration || ""} onChange={e => setOtForm({ ...otForm, duration: e.target.value })} /></div>
+                <div><label style={s.label}>Chapter</label><input style={s.input} placeholder="e.g. Motion" value={otForm.chapter || ""} onChange={e => setOtForm({ ...otForm, chapter: e.target.value })} /></div>
+                <div><label style={s.label}>Topic (optional)</label><input style={s.input} placeholder="e.g. Newton's Laws" value={otForm.topic || ""} onChange={e => setOtForm({ ...otForm, topic: e.target.value })} /></div>
+                <div><label style={s.label}>Difficulty</label>
+                  <select style={s.input} value={otForm.difficulty || "medium"} onChange={e => setOtForm({ ...otForm, difficulty: e.target.value })}>
+                    <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="mixed">Mixed</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div><label style={s.label}>Schedule Date (optional)</label><input style={s.input} type="date" value={otForm.scheduledDate || ""} onChange={e => setOtForm({ ...otForm, scheduledDate: e.target.value })} /></div>
+                <div><label style={s.label}>Schedule Time (optional)</label><input style={s.input} type="time" value={otForm.scheduledTime || ""} onChange={e => setOtForm({ ...otForm, scheduledTime: e.target.value })} /></div>
+              </div>
+              <div><label style={s.label}>Instructions (optional)</label><textarea style={{ ...s.input, height: 60, resize: "none" }} placeholder="e.g. Sabhi questions attempt karo. Negative marking nahi hai." value={otForm.instructions || ""} onChange={e => setOtForm({ ...otForm, instructions: e.target.value })} /></div>
+              <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                <button onClick={() => { if (!otForm.title || !otForm.subject || !otForm.forClass) { showMsg("Title, Subject aur Class required hai!"); return; } setOtStep(2); }} style={s.btnP}><i className="fas fa-arrow-right" style={{ marginRight: 6 }} />Next → Add Questions</button>
+                <button onClick={() => { setShowOtForm(false); setOtForm({}); setOtQuestions([]); setOtStep(1); }} style={s.btnGray}>Cancel</button>
+              </div>
+            </>}
+
+            {/* ═══ STEP 2: Questions ═══ */}
+            {otStep === 2 && <>
+              <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 6, color: "#7C3AED" }}><i className="fas fa-question-circle" style={{ marginRight: 8 }} />Add Questions — {otForm.title}</h3>
+              <p style={{ fontSize: ".76rem", color: "#6B7F99", marginBottom: 16 }}>{otForm.subject} · {CLASS_CATEGORIES.find(c => c.id === otForm.forClass)?.label || otForm.forClass} · {otQuestions.length} questions added</p>
+
+              {/* Question Mode Selector */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+                {[
+                  { id: "manual", icon: "fa-pen", label: "Manual Entry", desc: "Khud question likho", color: "#1349A8" },
+                  { id: "ai", icon: "fa-robot", label: "AI Generate", desc: "AI se auto-generate karo", color: "#7C3AED" },
+                  { id: "pdf", icon: "fa-file-pdf", label: "PDF Upload", desc: "PDF se questions extract karo", color: "#DC2626" },
+                ].map(m => (
+                  <div key={m.id} onClick={() => setOtQuestionMode(m.id)} style={{ padding: 16, borderRadius: 12, border: otQuestionMode === m.id ? `2px solid ${m.color}` : "1px solid #D4DEF0", background: otQuestionMode === m.id ? `${m.color}08` : "#fff", cursor: "pointer", textAlign: "center", transition: "all .2s" }}>
+                    <i className={`fas ${m.icon}`} style={{ fontSize: "1.3rem", color: m.color, marginBottom: 6 }} />
+                    <div style={{ fontWeight: 700, fontSize: ".85rem", color: m.color }}>{m.label}</div>
+                    <div style={{ fontSize: ".68rem", color: "#6B7F99" }}>{m.desc}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ═══ MANUAL QUESTION ENTRY ═══ */}
+              {otQuestionMode === "manual" && (
+                <div style={{ background: "#EFF6FF", borderRadius: 12, padding: 16, border: "1px solid #BFDBFE", marginBottom: 16 }}>
+                  <h4 style={{ fontSize: ".9rem", fontWeight: 700, color: "#1349A8", marginBottom: 12 }}><i className="fas fa-pen" style={{ marginRight: 6 }} />Manual Question Entry</h4>
+                  {(() => {
+                    const newQ = otQuestions.length > 0 && otQuestions[otQuestions.length - 1]._editing ? otQuestions[otQuestions.length - 1] : { question: "", options: ["", "", "", ""], correctAnswer: 0, explanation: "", _editing: true };
+                    const updateNewQ = (field, val) => {
+                      if (otQuestions.length > 0 && otQuestions[otQuestions.length - 1]._editing) {
+                        const updated = [...otQuestions]; updated[updated.length - 1] = { ...updated[updated.length - 1], [field]: val }; setOtQuestions(updated);
+                      } else { setOtQuestions([...otQuestions, { ...newQ, [field]: val }]); }
+                    };
+                    const updateOption = (idx, val) => {
+                      const opts = [...(newQ.options || ["", "", "", ""])]; opts[idx] = val; updateNewQ("options", opts);
+                    };
+                    return <>
+                      <div><label style={s.label}>Question *</label><textarea style={{ ...s.input, height: 60, resize: "none" }} placeholder="Question likho..." value={newQ.question} onChange={e => updateNewQ("question", e.target.value)} /></div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        {[0, 1, 2, 3].map(i => (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <input type="radio" name="correctOpt" checked={newQ.correctAnswer === i} onChange={() => updateNewQ("correctAnswer", i)} style={{ accentColor: "#16A34A" }} />
+                            <input style={{ ...s.input, marginBottom: 0, borderColor: newQ.correctAnswer === i ? "#16A34A" : "#C0D0E8" }} placeholder={`Option ${String.fromCharCode(65 + i)}`} value={(newQ.options || [])[i] || ""} onChange={e => updateOption(i, e.target.value)} />
+                          </div>
+                        ))}
+                      </div>
+                      <p style={{ fontSize: ".68rem", color: "#16A34A", marginTop: -4, marginBottom: 8 }}><i className="fas fa-check-circle" style={{ marginRight: 3 }} />Green radio button = sahi jawab select karo</p>
+                      <div><label style={s.label}>Explanation (optional)</label><input style={s.input} placeholder="Ye answer sahi kyun hai..." value={newQ.explanation} onChange={e => updateNewQ("explanation", e.target.value)} /></div>
+                      <button onClick={() => {
+                        if (!newQ.question?.trim()) { showMsg("Question likho!"); return; }
+                        if (!(newQ.options || []).some(o => o.trim())) { showMsg("Kam se kam 1 option bharo!"); return; }
+                        const cleaned = { ...newQ }; delete cleaned._editing;
+                        if (otQuestions.length > 0 && otQuestions[otQuestions.length - 1]._editing) {
+                          const updated = [...otQuestions]; updated[updated.length - 1] = cleaned; setOtQuestions(updated);
+                        } else { setOtQuestions([...otQuestions, cleaned]); }
+                        showMsg(`Q${otQuestions.length} added!`);
+                      }} style={s.btnG}><i className="fas fa-plus" style={{ marginRight: 6 }} />Add Question</button>
+                    </>;
+                  })()}
+                </div>
+              )}
+
+              {/* ═══ AI QUESTION GENERATION ═══ */}
+              {otQuestionMode === "ai" && (
+                <div style={{ background: "#FAF5FF", borderRadius: 12, padding: 16, border: "1px solid #E9D5FF", marginBottom: 16 }}>
+                  <h4 style={{ fontSize: ".9rem", fontWeight: 700, color: "#7C3AED", marginBottom: 12 }}><i className="fas fa-robot" style={{ marginRight: 6 }} />AI Question Generator (Gemini)</h4>
+                  <p style={{ fontSize: ".76rem", color: "#6B7F99", marginBottom: 12 }}>Chapter aur topic batao — AI automatically {otForm.subject || "subject"} ke questions generate karega {otForm.board || "board"} pattern me.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+                    <div><label style={s.label}>Chapter / Topic *</label><input style={s.input} placeholder="e.g. Motion, Chemical Reactions" value={otAiForm.chapter || ""} onChange={e => setOtAiForm({ ...otAiForm, chapter: e.target.value })} /></div>
+                    <div><label style={s.label}>Specific Topic</label><input style={s.input} placeholder="e.g. Newton's 3rd Law" value={otAiForm.topic || ""} onChange={e => setOtAiForm({ ...otAiForm, topic: e.target.value })} /></div>
+                    <div><label style={s.label}>No. of Questions</label><input style={s.input} type="number" placeholder="10" value={otAiForm.count || ""} onChange={e => setOtAiForm({ ...otAiForm, count: e.target.value })} /></div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+                    <div><label style={s.label}>Difficulty</label>
+                      <select style={s.input} value={otAiForm.difficulty || "medium"} onChange={e => setOtAiForm({ ...otAiForm, difficulty: e.target.value })}>
+                        <option value="easy">Easy — Basic concepts</option><option value="medium">Medium — Board level</option><option value="hard">Hard — Competitive level</option><option value="mixed">Mixed — Sab level ke</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button onClick={generateAiQuestions} disabled={otAiGenerating} style={{ ...s.btnP, background: "linear-gradient(135deg,#7C3AED,#A78BFA)", display: "flex", alignItems: "center", gap: 6 }}>
+                    {otAiGenerating ? <><i className="fas fa-spinner fa-spin" /> Generating...</> : <><i className="fas fa-magic" /> Generate Questions</>}
+                  </button>
+                </div>
+              )}
+
+              {/* ═══ PDF UPLOAD ═══ */}
+              {otQuestionMode === "pdf" && (
+                <div style={{ background: "#FEF2F2", borderRadius: 12, padding: 16, border: "1px solid #FCA5A5", marginBottom: 16 }}>
+                  <h4 style={{ fontSize: ".9rem", fontWeight: 700, color: "#DC2626", marginBottom: 12 }}><i className="fas fa-file-pdf" style={{ marginRight: 6 }} />PDF se Questions Extract Karo</h4>
+                  <p style={{ fontSize: ".76rem", color: "#6B7F99", marginBottom: 12 }}>Question paper ya worksheet ka PDF upload karo — AI automatically questions extract karke MCQ format me convert karega.</p>
+                  <div style={{ marginBottom: 12 }}>
+                    <input type="file" accept=".pdf" onChange={e => setOtPdfFile(e.target.files?.[0] || null)} style={{ fontSize: ".82rem" }} />
+                    {otPdfFile && <div style={{ fontSize: ".72rem", color: "#16A34A", marginTop: 4 }}><i className="fas fa-check-circle" style={{ marginRight: 4 }} />{otPdfFile.name} ({(otPdfFile.size / 1024).toFixed(0)} KB)</div>}
+                  </div>
+                  <button onClick={extractQuestionsFromPdf} disabled={otPdfProcessing || !otPdfFile} style={{ ...s.btnP, background: "linear-gradient(135deg,#DC2626,#F87171)", display: "flex", alignItems: "center", gap: 6 }}>
+                    {otPdfProcessing ? <><i className="fas fa-spinner fa-spin" /> Processing PDF...</> : <><i className="fas fa-file-pdf" /> Extract Questions</>}
+                  </button>
+                </div>
+              )}
+
+              {/* ═══ QUESTIONS LIST (Preview) ═══ */}
+              {otQuestions.length > 0 && (
+                <div style={{ ...s.card, border: "1px solid #D4DEF0" }}>
+                  <h4 style={{ fontSize: ".9rem", fontWeight: 700, color: "#0B1826", marginBottom: 12 }}><i className="fas fa-list-ol" style={{ marginRight: 8, color: "#1349A8" }} />Questions Preview ({otQuestions.filter(q => !q._editing).length})</h4>
+                  {otQuestions.filter(q => !q._editing).map((q, idx) => (
+                    <div key={idx} style={{ padding: "12px 14px", borderBottom: "1px solid #E8EFF8", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 8, background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontWeight: 800, fontSize: ".75rem", color: "#1349A8" }}>{idx + 1}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: ".84rem", marginBottom: 6 }}>{q.question}</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: ".76rem" }}>
+                          {(q.options || []).map((opt, oi) => (
+                            <div key={oi} style={{ padding: "4px 8px", borderRadius: 6, background: q.correctAnswer === oi ? "#F0FDF4" : "#F8FAFD", border: q.correctAnswer === oi ? "1px solid #86EFAC" : "1px solid #E8EFF8", color: q.correctAnswer === oi ? "#16A34A" : "#4A5E78", fontWeight: q.correctAnswer === oi ? 700 : 400 }}>
+                              {String.fromCharCode(65 + oi)}. {opt} {q.correctAnswer === oi && <i className="fas fa-check" style={{ marginLeft: 4, fontSize: ".6rem" }} />}
+                            </div>
+                          ))}
+                        </div>
+                        {q.explanation && <div style={{ fontSize: ".7rem", color: "#6B7F99", marginTop: 4 }}><i className="fas fa-lightbulb" style={{ marginRight: 3, color: "#D98D04" }} />{q.explanation}</div>}
+                      </div>
+                      <button onClick={() => { setOtQuestions(otQuestions.filter((_, i) => i !== idx)); showMsg("Question removed"); }} style={{ ...s.btnD, padding: "4px 8px", fontSize: ".65rem" }}><i className="fas fa-trash" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+                <button onClick={() => setOtStep(1)} style={s.btnGray}><i className="fas fa-arrow-left" style={{ marginRight: 6 }} />Back to Info</button>
+                <button onClick={saveOnlineTest} disabled={saving} style={{ ...s.btnP, background: "linear-gradient(135deg,#7C3AED,#A78BFA)" }}>
+                  <i className="fas fa-upload" style={{ marginRight: 6 }} />{saving ? "Saving..." : `Publish Test (${otQuestions.filter(q => !q._editing).length} Q)`}
+                </button>
+                <button onClick={() => { setShowOtForm(false); setOtForm({}); setOtQuestions([]); setOtStep(1); }} style={s.btnGray}>Cancel</button>
+              </div>
+            </>}
+          </div>}
+
+          {/* ═══ CLASS FILTER ═══ */}
+          {!showOtForm && <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={() => setOtClassFilter("all")} style={{ padding: "6px 14px", borderRadius: 8, border: otClassFilter === "all" ? "2px solid #7C3AED" : "1px solid #D4DEF0", background: otClassFilter === "all" ? "#FAF5FF" : "#fff", color: "#7C3AED", fontSize: ".74rem", fontWeight: 700, cursor: "pointer" }}>All</button>
+            {CLASS_CATEGORIES.map(c => (
+              <button key={c.id} onClick={() => setOtClassFilter(c.id)} style={{ padding: "6px 10px", borderRadius: 8, border: otClassFilter === c.id ? `2px solid ${c.color}` : "1px solid #D4DEF0", background: otClassFilter === c.id ? "#FAF5FF" : "#fff", color: c.color, fontSize: ".68rem", fontWeight: 600, cursor: "pointer" }}>{c.shortLabel}</button>
+            ))}
+          </div>}
+
+          {/* ═══ TESTS LIST ═══ */}
+          {!showOtForm && <>
+            {otList.length === 0 ? (
+              <div style={{ ...s.card, textAlign: "center", padding: 40 }}>
+                <i className="fas fa-laptop" style={{ fontSize: "2.5rem", color: "#B0C4DC", marginBottom: 12 }} />
+                <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#4A5E78", marginBottom: 6 }}>No Online Tests Yet</h3>
+                <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Click "Create Online Test" to make your first test for students.</p>
+              </div>
+            ) : (() => {
+              let filtered = [...otList];
+              if (otClassFilter !== "all") filtered = filtered.filter(t => t.forClass === otClassFilter || t.forClass === "all");
+              const typeColors = { practice: "#1349A8", weekly: "#7C3AED", monthly: "#D98D04", mock: "#059669", chapter: "#DC2626" };
+              const typeLabels = { practice: "Practice", weekly: "Weekly", monthly: "Monthly", mock: "Mock", chapter: "Chapter" };
+              return filtered.length === 0 ? (
+                <div style={{ ...s.card, textAlign: "center", padding: 30, color: "#6B7F99" }}>No tests for this class filter.</div>
+              ) : filtered.map(test => {
+                const catLabel = test.forClass === "all" ? "All Classes" : (CLASS_CATEGORIES.find(c => c.id === test.forClass)?.label || test.forClass);
+                return (
+                  <div key={test.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 14, borderLeft: `4px solid ${test.isActive ? (typeColors[test.testType] || "#7C3AED") : "#B0C4DC"}`, opacity: test.isActive ? 1 : 0.7 }}>
+                    <div style={{ width: 50, height: 50, borderRadius: 12, background: test.isActive ? "#FAF5FF" : "#F0F4FA", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <i className={`fas ${test.isActive ? "fa-laptop" : "fa-pause-circle"}`} style={{ fontSize: "1.2rem", color: test.isActive ? "#7C3AED" : "#B0C4DC" }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, fontSize: ".92rem" }}>{test.title}</span>
+                        <span style={s.badge(typeColors[test.testType] || "#7C3AED", `${typeColors[test.testType] || "#7C3AED"}15`)}>{typeLabels[test.testType] || test.testType}</span>
+                        <span style={s.badge("#6B7F99", "#F0F4FA")}>{catLabel}</span>
+                        <span style={s.badge(test.isActive ? "#16A34A" : "#DC2626", test.isActive ? "#F0FDF4" : "#FEF2F2")}>{test.isActive ? "Active" : "Inactive"}</span>
+                      </div>
+                      <div style={{ fontSize: ".76rem", color: "#4A5E78", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <span><i className="fas fa-book" style={{ marginRight: 4, color: "#6B7F99" }} />{test.subject}</span>
+                        <span><i className="fas fa-clock" style={{ marginRight: 4, color: "#6B7F99" }} />{test.duration} min</span>
+                        <span><i className="fas fa-question-circle" style={{ marginRight: 4, color: "#6B7F99" }} />{test.totalQuestions} Q</span>
+                        {test.chapter && <span><i className="fas fa-bookmark" style={{ marginRight: 4, color: "#6B7F99" }} />{test.chapter}</span>}
+                        {test.scheduledDate && <span><i className="fas fa-calendar" style={{ marginRight: 4, color: "#6B7F99" }} />{test.scheduledDate} {test.scheduledTime || ""}</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button onClick={() => toggleTestActive(test.id, test.isActive)} style={test.isActive ? s.btnO : s.btnG} title={test.isActive ? "Deactivate" : "Activate"}>
+                        <i className={`fas ${test.isActive ? "fa-pause" : "fa-play"}`} />
+                      </button>
+                      <button onClick={() => { setOtEditId(test.id); setOtForm({ ...test }); setOtQuestions(test.questions || []); setShowOtForm(true); setOtStep(1); }} style={s.btnO}><i className="fas fa-edit" /></button>
+                      <button onClick={() => deleteOnlineTest(test.id)} style={s.btnD}><i className="fas fa-trash" /></button>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </>}
+
+          {/* Tips */}
+          <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
+            <div>
+              <strong>Online Test Tips:</strong><br />
+              • 3 tarike se questions add karo: Manual type karo, AI se generate karo, ya PDF upload karo<br />
+              • AI generate me chapter/topic dalo — Gemini automatically board pattern ke questions banayega<br />
+              • PDF upload me question paper ka PDF dalo — AI MCQ format me convert karega<br />
+              • Test Active/Inactive toggle se control karo ki students ko dikhega ya nahi<br />
+              • Schedule date/time set karo — students ko us time pe test milega Student App me<br />
+              • Questions review karo publish karne se pehle — galat questions hata sakte ho
+            </div>
+          </div>
+        </>}
+
+
+        {/* ═══════════ AI DOUBT INSIGHTS TAB ═══════════ */}
+        {tab === "ai_doubts" && (() => {
+          // Load all doubts on first render
+          if (allDoubtsData.length === 0 && !allDoubtsLoading) {
+            setAllDoubtsLoading(true);
+            getDocs(collection(db, "doubt_history")).then(snap => {
+              const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+              arr.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
+              setAllDoubtsData(arr);
+              setAllDoubtsLoading(false);
+            }).catch(e => { console.error("Doubt load error:", e); setAllDoubtsLoading(false); });
+          }
+
+          // Subject-wise grouping
+          const subjectMap = {};
+          allDoubtsData.forEach(d => {
+            const sub = d.subject || "General";
+            if (!subjectMap[sub]) subjectMap[sub] = [];
+            subjectMap[sub].push(d);
+          });
+          const subjectEntries = Object.entries(subjectMap).sort((a, b) => b[1].length - a[1].length);
+
+          // Common questions — group similar first messages
+          const questionMap = {};
+          allDoubtsData.forEach(d => {
+            const q = (d.messages?.[0]?.content || d.question || "").trim().toLowerCase().slice(0, 80);
+            if (!q) return;
+            const key = q.replace(/[^a-zA-Z0-9\u0900-\u097F\s]/g, "").trim();
+            if (!questionMap[key]) questionMap[key] = { question: d.messages?.[0]?.content || d.question || "", count: 0, students: [], subject: d.subject || "General", latest: d.createdAt };
+            questionMap[key].count++;
+            if (!questionMap[key].students.includes(d.studentName)) questionMap[key].students.push(d.studentName);
+          });
+          const commonQuestions = Object.values(questionMap).sort((a, b) => b.count - a.count).slice(0, 30);
+
+          // Student-wise grouping
+          const studentMap = {};
+          allDoubtsData.forEach(d => {
+            const name = d.studentName || "Unknown";
+            if (!studentMap[name]) studentMap[name] = { count: 0, subjects: {} };
+            studentMap[name].count++;
+            const sub = d.subject || "General";
+            studentMap[name].subjects[sub] = (studentMap[name].subjects[sub] || 0) + 1;
+          });
+          const studentEntries = Object.entries(studentMap).sort((a, b) => b[1].count - a[1].count);
+
+          return <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}><i className="fas fa-brain" style={{ marginRight: 8, color: "#7C3AED" }} />AI Doubt Insights</h2>
+                <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Saare students ke common doubts · Subject-wise analysis · Most asked questions</p>
+              </div>
+              <button onClick={() => { setAllDoubtsData([]); setAllDoubtsLoading(false); }} style={s.btnO}><i className="fas fa-sync" style={{ marginRight: 6 }} />Refresh</button>
+            </div>
+
+            {allDoubtsLoading ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#6B7F99" }}><i className="fas fa-spinner fa-spin" style={{ fontSize: "1.5rem", marginBottom: 8 }} /><p>Loading all doubt data...</p></div>
+            ) : <>
+              {/* Stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+                <div style={s.stat}><div style={{ fontSize: "1.6rem", fontWeight: 800, color: "#7C3AED" }}>{allDoubtsData.length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Total Doubts Asked</div></div>
+                <div style={s.stat}><div style={{ fontSize: "1.6rem", fontWeight: 800, color: "#1349A8" }}>{subjectEntries.length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Subjects</div></div>
+                <div style={s.stat}><div style={{ fontSize: "1.6rem", fontWeight: 800, color: "#059669" }}>{studentEntries.length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Students Using AI</div></div>
+                <div style={s.stat}><div style={{ fontSize: "1.6rem", fontWeight: 800, color: "#D98D04" }}>{allDoubtsData.filter(d => d.hasImage).length}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Image Doubts</div></div>
+              </div>
+
+              {/* Subject Distribution */}
+              <div style={{ ...s.card, marginBottom: 16 }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-chart-pie" style={{ marginRight: 8, color: "#7C3AED" }} />Subject-wise Doubt Distribution</h3>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {subjectEntries.map(([sub, doubts]) => {
+                    const pct = Math.round((doubts.length / allDoubtsData.length) * 100);
+                    const colors = ["#7C3AED", "#1349A8", "#059669", "#D98D04", "#DC2626", "#0891B2", "#BE185D", "#16A34A"];
+                    const ci = subjectEntries.findIndex(e => e[0] === sub) % colors.length;
+                    return (
+                      <div key={sub} style={{ flex: "1 1 220px", padding: 14, borderRadius: 12, border: "1px solid #E8EFF8", background: "#FAFCFE" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                          <span style={{ fontSize: ".85rem", fontWeight: 700, color: colors[ci] }}>{sub}</span>
+                          <span style={{ fontSize: ".74rem", fontWeight: 700, color: "#4A5E78" }}>{doubts.length} ({pct}%)</span>
+                        </div>
+                        <div style={{ width: "100%", height: 8, background: "#E8EFF8", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ width: pct + "%", height: "100%", background: colors[ci], borderRadius: 99 }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Most Common Questions */}
+              <div style={{ ...s.card, marginBottom: 16 }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-fire" style={{ marginRight: 8, color: "#DC2626" }} />Most Common Questions (Sabse zyada puchhe gaye)</h3>
+                {commonQuestions.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: 20, color: "#6B7F99" }}>No doubt data yet.</div>
+                ) : commonQuestions.map((q, idx) => (
+                  <div key={idx} style={{ padding: "12px 14px", borderBottom: "1px solid #E8EFF8", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: q.count > 1 ? "#FEF2F2" : "#F0F4FA", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontWeight: 800, fontSize: ".72rem", color: q.count > 1 ? "#DC2626" : "#6B7F99" }}>{idx + 1}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: ".84rem", fontWeight: 600, color: "#0B1826", marginBottom: 4 }}>{q.question}</div>
+                      <div style={{ fontSize: ".7rem", color: "#6B7F99", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={s.badge("#7C3AED", "#FAF5FF")}>{q.subject}</span>
+                        {q.count > 1 && <span style={s.badge("#DC2626", "#FEF2F2")}>{q.count}x asked</span>}
+                        <span style={{ fontSize: ".65rem" }}>by: {q.students.slice(0, 3).join(", ")}{q.students.length > 3 ? ` +${q.students.length - 3} more` : ""}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Student-wise Doubt Activity */}
+              <div style={{ ...s.card }}>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}><i className="fas fa-users" style={{ marginRight: 8, color: "#059669" }} />Student-wise AI Usage</h3>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem" }}>
+                  <thead><tr style={{ background: "#F0F4FA" }}>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Student</th>
+                    <th style={{ padding: "8px 8px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Total Doubts</th>
+                    <th style={{ padding: "8px 8px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Subjects</th>
+                  </tr></thead>
+                  <tbody>
+                    {studentEntries.map(([name, data], idx) => (
+                      <tr key={name} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                        <td style={{ padding: "8px 10px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                        <td style={{ padding: "8px 10px", fontWeight: 600 }}>{name}</td>
+                        <td style={{ padding: "8px 8px", textAlign: "center", fontWeight: 800, color: "#7C3AED" }}>{data.count}</td>
+                        <td style={{ padding: "8px 8px" }}>
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                            {Object.entries(data.subjects).map(([sub, cnt]) => (
+                              <span key={sub} style={s.badge("#1349A8", "#EFF6FF")}>{sub}: {cnt}</span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>}
+
+            {/* Tips */}
+            <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
+              <div>
+                <strong>AI Doubt Insights Tips:</strong><br />
+                • Ye section saare students ke AI doubts ka analysis dikhata hai<br />
+                • "Most Common Questions" se pata chalta hai ki students ko kis topic me problem aa rahi hai<br />
+                • Subject distribution se weak areas identify karo aur class me us topic pe zyada focus karo<br />
+                • Student-wise usage se pata chalta hai kaun kitna AI use kar raha hai
+              </div>
+            </div>
+          </>;
+        })()}
+
         {/* ═══════════ FEE MANAGEMENT TAB ═══════════ */}
         {tab === "fees" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -4250,6 +5813,11 @@ export default function AdminPanel() {
                                 <i className="fas fa-plus" style={{ marginRight: 3 }} />Pay
                               </button>
                             )}
+                            {total > 0 && (
+                              <button onClick={() => setShowReceipt(st.id)} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
+                                <i className="fas fa-receipt" style={{ marginRight: 3 }} />Receipt
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -4298,10 +5866,155 @@ export default function AdminPanel() {
               <strong>Fee Management Tips:</strong><br />
               • Admission form me Total Fee aur Enrollment Fee Paid bharo<br />
               • "Pay" button se installment wise payment record karo<br />
+              • "Receipt" button se rasid print karo — exact coaching receipt format me<br />
+              • Subject-wise fees admission form me "Subject-wise Fee" section me bharo<br />
               • Due amount auto-calculate hota hai<br />
               • Fee payments history "fee_payments" collection me save hoti hai
             </div>
           </div>
+
+          {/* ═══ FEE RECEIPT MODAL ═══ */}
+          {showReceipt && (() => {
+            const st = students.find(x => x.id === showReceipt);
+            if (!st) return null;
+            const total = Number(st.totalFee || 0);
+            const paid = Number(st.enrollmentFeePaid || 0);
+            const due = Math.max(0, total - paid);
+            const subjects = [
+              { name: st.subject1 || "PHYSICS", fee: st.fee1 || "" },
+              { name: st.subject2 || "CHEMISTRY", fee: st.fee2 || "" },
+              { name: st.subject3 || "MATHS/BIO", fee: st.fee3 || "" },
+              { name: st.subject4 || "SCIENCE", fee: st.fee4 || "" },
+              { name: st.subject5 || "ENGLISH", fee: st.fee5 || "" },
+              { name: st.subject6 || "SOCIAL STUDY", fee: st.fee6 || "" },
+            ];
+            const subjectTotal = subjects.reduce((s, sub) => s + Number(sub.fee || 0), 0);
+            // Number to words (Hindi)
+            const numToWords = (n) => {
+              if (!n || n === 0) return "";
+              const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+              const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+              if (n < 20) return ones[n];
+              if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "");
+              if (n < 1000) return ones[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " " + numToWords(n % 100) : "");
+              if (n < 100000) return numToWords(Math.floor(n / 1000)) + " Thousand" + (n % 1000 ? " " + numToWords(n % 1000) : "");
+              if (n < 10000000) return numToWords(Math.floor(n / 100000)) + " Lakh" + (n % 100000 ? " " + numToWords(n % 100000) : "");
+              return String(n);
+            };
+
+            const printReceipt = (size) => {
+              const el = document.getElementById("pid-receipt");
+              if (!el) return;
+              const printWin = window.open("", "_blank", "width=600,height=800");
+              const scale = size === "small" ? "60%" : size === "medium" ? "80%" : "100%";
+              printWin.document.write(`<html><head><title>PID Receipt — ${st.studentName}</title><style>
+                @page { size: ${size === "small" ? "80mm 150mm" : size === "medium" ? "A5" : "A4"}; margin: ${size === "small" ? "2mm" : "10mm"}; }
+                body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; justify-content: center; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                .receipt-wrap { width: ${size === "small" ? "76mm" : size === "medium" ? "380px" : "460px"}; border: 3px solid #B91C1C !important; border-radius: 4px; margin: 0 auto; height: fit-content !important; display: inline-block; }
+                body { display: block !important; text-align: center; }
+                .receipt-wrap > div { border: none !important; }
+                .receipt-wrap table { page-break-inside: avoid; }
+                table { border: 2px solid #B91C1C !important; border-collapse: collapse !important; }
+                th, td { border: 1px solid #B91C1C !important; }
+                * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+                @media print {
+                  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+                  .receipt-wrap { border: 3px solid #B91C1C !important; }
+                  table { border: 2px solid #B91C1C !important; }
+                  th, td { border: 1px solid #B91C1C !important; }
+                }
+              </style></head><body><div class="receipt-wrap">${el.innerHTML}</div></body></html>`);
+              printWin.document.close();
+              setTimeout(() => { printWin.print(); }, 500);
+            };
+
+            return (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 20, overflowY: "auto" }} onClick={() => setShowReceipt(null)}>
+                <div style={{ background: "#F8FAFD", borderRadius: 16, padding: 24, maxWidth: 560, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.2)", marginTop: 20 }} onClick={e => e.stopPropagation()}>
+
+                  {/* Print Size Buttons */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+                    <h3 style={{ fontSize: "1rem", fontWeight: 800, color: "#0B1826", margin: 0 }}><i className="fas fa-receipt" style={{ marginRight: 8, color: "#D98D04" }} />Fee Receipt</h3>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => printReceipt("small")} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #D4DEF0", background: "#fff", color: "#4A5E78", fontSize: ".72rem", fontWeight: 600, cursor: "pointer" }}><i className="fas fa-print" style={{ marginRight: 4 }} />Small (80mm)</button>
+                      <button onClick={() => printReceipt("medium")} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".72rem", fontWeight: 600, cursor: "pointer" }}><i className="fas fa-print" style={{ marginRight: 4 }} />A5 Medium</button>
+                      <button onClick={() => printReceipt("large")} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#059669", fontSize: ".72rem", fontWeight: 600, cursor: "pointer" }}><i className="fas fa-print" style={{ marginRight: 4 }} />A4 Full</button>
+                    </div>
+                  </div>
+
+                  {/* ═══ RECEIPT — Exact coaching receipt format ═══ */}
+                  <div id="pid-receipt" style={{ background: "#fff", border: "3px solid #B91C1C", borderRadius: 4, padding: 0, fontFamily: "Arial, sans-serif", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+
+                    {/* Header */}
+                    <div style={{ textAlign: "center", padding: "12px 16px 8px", borderBottom: "2px solid #B91C1C" }}>
+                      <div style={{ fontSize: ".65rem", color: "#333", marginBottom: 2 }}>पटेल शिक्षण एवं सेवा समिति द्वारा संचालित...</div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -14 }}>
+                        <div style={{ fontSize: ".6rem", border: "1px solid #333", padding: "1px 6px", background: "#FEF3C7" }}>पंजीयन क्रमांक<br/><strong>122201880553</strong></div>
+                      </div>
+                      <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#B91C1C", fontFamily: "Impact, sans-serif", letterSpacing: 2 }}>PATEL INSTITUTE</div>
+                      <div style={{ fontSize: ".78rem", fontWeight: 700, color: "#333" }}>Matiya Road, Near Saket Dham, Dongargaon</div>
+                      <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#fff", background: "#B91C1C", display: "inline-block", padding: "2px 12px", borderRadius: 4, marginTop: 4 }}>Mo. 8319002877, 7470412110</div>
+                    </div>
+
+                    {/* Student Details */}
+                    <div style={{ padding: "10px 16px", fontSize: ".78rem", color: "#333" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span><strong>S.No.:</strong> {st.formNo || "—"}</span>
+                        <span><strong>Date:</strong> {new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })}</span>
+                      </div>
+                      <div style={{ marginBottom: 4 }}><strong>Student Name:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1, minWidth: 200, display: "inline-block" }}>{st.studentName || ""}</span></div>
+                      <div style={{ marginBottom: 4 }}><strong>Father Name:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1, minWidth: 200, display: "inline-block" }}>{st.fatherName || ""}</span></div>
+                      <div style={{ marginBottom: 4 }}><strong>Address:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1, minWidth: 200, display: "inline-block" }}>{st.permanentAddress || ""}</span></div>
+                      <div style={{ display: "flex", gap: 16, marginBottom: 6 }}>
+                        <span><strong>Class:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1 }}>{st.class || ""}</span></span>
+                        <span><strong>Medium:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1 }}>{st.medium || ""}</span></span>
+                        <span><strong>Board:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1 }}>{st.board || ""}</span></span>
+                      </div>
+                    </div>
+
+                    {/* Subject-wise Fee Table */}
+                    <div style={{ padding: "0 16px 10px" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem", border: "2px solid #B91C1C" }}>
+                        <thead>
+                          <tr style={{ background: "#FEF2F2" }}>
+                            <th style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "left", fontWeight: 700, width: 35 }}>S.N.</th>
+                            <th style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "left", fontWeight: 700 }}>SUBJECT</th>
+                            <th style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "right", fontWeight: 700, width: 90 }}>AMOUNT</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {subjects.map((sub, i) => (
+                            <tr key={i}>
+                              <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", fontWeight: 700 }}>{i + 1}.</td>
+                              <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", fontWeight: 700 }}>{sub.name.toUpperCase()}</td>
+                              <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", textAlign: "right" }}>{sub.fee ? `₹${Number(sub.fee).toLocaleString("en-IN")}` : ""}</td>
+                            </tr>
+                          ))}
+                          <tr style={{ background: "#FEF2F2" }}>
+                            <td colSpan={2} style={{ border: "1px solid #B91C1C", padding: "6px 10px", fontWeight: 800, color: "#B91C1C" }}>Total</td>
+                            <td style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "right", fontWeight: 800, color: "#B91C1C" }}>₹{(subjectTotal > 0 ? subjectTotal : total).toLocaleString("en-IN")}</td>
+                          </tr>
+                          <tr>
+                            <td colSpan={3} style={{ border: "1px solid #B91C1C", padding: "6px 10px", fontSize: ".72rem" }}><strong>In Words -</strong> {numToWords(subjectTotal > 0 ? subjectTotal : total)} Rupees Only</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Signature */}
+                    <div style={{ padding: "16px 16px 12px", textAlign: "left" }}>
+                      <div style={{ fontSize: ".78rem", fontWeight: 700, color: "#333" }}>Signature</div>
+                    </div>
+                  </div>
+
+                  {/* Close Button */}
+                  <div style={{ textAlign: "center", marginTop: 16 }}>
+                    <button onClick={() => setShowReceipt(null)} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#1349A8", color: "#fff", fontSize: ".82rem", fontWeight: 700, cursor: "pointer" }}>Close Receipt</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </>}
 
       </div>

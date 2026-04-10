@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { db, auth, googleProvider } from "../firebase";
-import { collection, query, where, onSnapshot, getDocs, orderBy } from "firebase/firestore";
+import { collection, query, where, onSnapshot, getDocs, orderBy, addDoc, serverTimestamp } from "firebase/firestore";
 import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
 
 // ─── ICONS (SVG inline) ──────────────────────────────────────────────────────
@@ -17,6 +17,8 @@ const Icon = ({ name, size = 20, color = "currentColor" }) => {
     trending_up: <><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></>,
     trending_down: <><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></>,
     clock: <><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></>,
+    trophy: <><path d="M6 9H4.5a2.5 2.5 0 010-5H6"/><path d="M18 9h1.5a2.5 2.5 0 000-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20 17 22"/><path d="M18 2H6v7a6 6 0 0012 0V2z"/></>,
+    star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>,
     rfid: <><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></>,
     star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>,
     arrow_right: <><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></>,
@@ -283,6 +285,18 @@ const DashboardScreen = ({ navigate, student, attendance, notices, holidays }) =
         </div>
       </div>
 
+      {/* Performance Quick Card */}
+      <div onClick={() => navigate("performance")} style={{ background: "linear-gradient(135deg, #4c1d95, #7c3aed)", borderRadius: 20, padding: 18, marginTop: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 14, background: "rgba(255,255,255,.15)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Icon name="trophy" size={22} color="#fbbf24"/>
+        </div>
+        <div style={{ flex: 1 }}>
+          <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#fff" }}>Academic Performance</h4>
+          <p style={{ margin: "2px 0 0", fontSize: 11, color: "#c4b5fd" }}>Test results, marks, class ranking dekho →</p>
+        </div>
+        <Icon name="arrow_right" size={18} color="#c4b5fd"/>
+      </div>
+
       {/* Latest Notices */}
       <div style={{ background: "#fff", borderRadius: 20, padding: 18, marginTop: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -325,12 +339,43 @@ const DashboardScreen = ({ navigate, student, attendance, notices, holidays }) =
 };
 
 // ─── SCREEN: ATTENDANCE ──────────────────────────────────────────────────────
-const AttendanceScreen = ({ student, attendance, holidays }) => {
+const AttendanceScreen = ({ student, attendance, holidays, leaveApplications = [] }) => {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [viewMode, setViewMode] = useState("weekly"); // weekly | monthly | leave
+  const [calMonth, setCalMonth] = useState(new Date().getMonth());
+  const [calYear, setCalYear] = useState(new Date().getFullYear());
+  const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({ date: new Date().toISOString().split("T")[0], reason: "", leaveType: "full_day" });
+  const [leaveSaving, setLeaveSaving] = useState(false);
+  const [leaveMsg, setLeaveMsg] = useState("");
+  const [calSelectedDate, setCalSelectedDate] = useState(null); // for calendar date click
+
   const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const monthAtt = attendance.filter(a => a.date >= monthStart && a.studentId === student.id);
   const holidayDates = new Set(holidays.map(h => h.date));
 
+  // Weekly dates helper
+  const getWeekDates = (offset) => {
+    const today = new Date();
+    const d = new Date(today);
+    d.setDate(d.getDate() + (offset * 7));
+    const day = d.getDay();
+    const mon = new Date(d);
+    mon.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    const dates = [];
+    for (let i = 0; i < 7; i++) {
+      const nd = new Date(mon);
+      nd.setDate(mon.getDate() + i);
+      dates.push(nd.toISOString().split("T")[0]);
+    }
+    return dates;
+  };
+
+  const weekDates = getWeekDates(weekOffset);
+  const weekLabel = `${new Date(weekDates[0]).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} — ${new Date(weekDates[6]).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`;
+
+  // Monthly stats (current month for summary)
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const monthAtt = attendance.filter(a => a.date >= monthStart && a.studentId === student.id);
   let workingDays = 0;
   for (let d = 1; d <= now.getDate(); d++) {
     const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -340,26 +385,6 @@ const AttendanceScreen = ({ student, attendance, holidays }) => {
   const presentDays = new Set(monthAtt.filter(a => a.type === "in").map(a => a.date)).size;
   const absentDays = Math.max(0, workingDays - presentDays);
   const attPercentage = workingDays > 0 ? Math.round((presentDays / workingDays) * 100) : 0;
-
-  // Build daily records for this month
-  const dailyRecords = [];
-  for (let d = now.getDate(); d >= 1; d--) {
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const dayOfWeek = new Date(dateStr + "T00:00:00").getDay();
-    if (dayOfWeek === 0) continue; // skip Sunday
-    const isHol = holidayDates.has(dateStr);
-    const dayAtt = attendance.filter(a => a.date === dateStr && a.studentId === student.id);
-    const checkIn = dayAtt.find(a => a.type === "in");
-    const checkOut = dayAtt.find(a => a.type === "out");
-    const status = isHol ? "Holiday" : checkIn ? "Present" : "Absent";
-    const duration = checkIn && checkOut ? (() => {
-      const diff = new Date(checkOut.timestamp) - new Date(checkIn.timestamp);
-      const hrs = Math.floor(diff / 3600000);
-      const mins = Math.floor((diff % 3600000) / 60000);
-      return `${hrs}h ${mins}m`;
-    })() : "—";
-    dailyRecords.push({ date: `${d} ${now.toLocaleDateString("en-IN", { month: "short" })}`, day: getDayName(dateStr), status, checkIn: fmtTime(checkIn?.timestamp), checkOut: fmtTime(checkOut?.timestamp), duration, isHol });
-  }
 
   return (
     <div style={{ padding: "0 16px 20px" }}>
@@ -373,63 +398,267 @@ const AttendanceScreen = ({ student, attendance, holidays }) => {
         ))}
       </div>
 
-      {/* Progress */}
-      <div style={{ background: "#fff", borderRadius: 20, padding: 18, marginTop: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
-        <h4 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#1e293b" }}>{now.toLocaleDateString("en-IN", { month: "long", year: "numeric" })} – Attendance</h4>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ position: "relative", width: 90, height: 90 }}>
-            <CircularProgress value={attPercentage} size={90} stroke={8} color={attPercentage >= 75 ? "#10b981" : "#ef4444"}/>
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ fontSize: 18, fontWeight: 900, color: "#1e293b" }}>{attPercentage}%</span>
-            </div>
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ background: "#f1f5f9", borderRadius: 10, overflow: "hidden", height: 10, marginBottom: 6 }}>
-              <div style={{ height: "100%", width: `${attPercentage}%`, background: attPercentage >= 75 ? "linear-gradient(90deg, #10b981, #059669)" : "linear-gradient(90deg, #ef4444, #dc2626)", borderRadius: 10, transition: "width 1s ease" }}/>
-            </div>
-            <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>{presentDays} of {workingDays} working days attended</p>
-            <p style={{ margin: "6px 0 0", fontSize: 11, color: attPercentage >= 75 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
-              {attPercentage >= 75 ? "✓ Good standing" : "⚠ Below 75% – Attention needed"}
-            </p>
-          </div>
-        </div>
+      {/* View Mode Toggle */}
+      <div style={{ display: "flex", gap: 4, marginTop: 14, background: "#f1f5f9", borderRadius: 12, padding: 4 }}>
+        <button onClick={() => setViewMode("weekly")} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: viewMode === "weekly" ? "#fff" : "transparent", color: viewMode === "weekly" ? "#2563eb" : "#94a3b8", fontSize: 12, fontWeight: 700, cursor: "pointer", boxShadow: viewMode === "weekly" ? "0 2px 8px rgba(0,0,0,.06)" : "none" }}>📅 Weekly</button>
+        <button onClick={() => setViewMode("monthly")} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: viewMode === "monthly" ? "#fff" : "transparent", color: viewMode === "monthly" ? "#2563eb" : "#94a3b8", fontSize: 12, fontWeight: 700, cursor: "pointer", boxShadow: viewMode === "monthly" ? "0 2px 8px rgba(0,0,0,.06)" : "none" }}>📆 Monthly</button>
+        <button onClick={() => setViewMode("leave")} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: viewMode === "leave" ? "#fff" : "transparent", color: viewMode === "leave" ? "#f59e0b" : "#94a3b8", fontSize: 12, fontWeight: 700, cursor: "pointer", boxShadow: viewMode === "leave" ? "0 2px 8px rgba(0,0,0,.06)" : "none" }}>📝 Leave</button>
       </div>
 
-      {/* Daily Record */}
-      <div style={{ background: "#fff", borderRadius: 20, padding: 18, marginTop: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
-        <h4 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#1e293b" }}>Daily Attendance Record</h4>
-        {student.rfidCode && (
-          <div style={{ background: "#f0f9ff", borderRadius: 12, padding: "10px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10, border: "1px solid #bae6fd" }}>
-            <Icon name="rfid" size={18} color="#0369a1"/>
-            <div>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#0369a1" }}>RFID Card: {student.rfidCode}</p>
-              <p style={{ margin: "2px 0 0", fontSize: 11, color: "#64748b" }}>Auto check-in/check-out on tap</p>
+      {/* ═══ WEEKLY VIEW ═══ */}
+      {viewMode === "weekly" && (
+        <div style={{ background: "#fff", borderRadius: 20, padding: 18, marginTop: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
+          {/* Week Navigation */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <button onClick={() => setWeekOffset(weekOffset - 1)} style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#475569" }}>◀</button>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{weekLabel}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>{weekOffset === 0 ? "This Week" : weekOffset === -1 ? "Last Week" : `${Math.abs(weekOffset)} weeks ${weekOffset < 0 ? "ago" : "ahead"}`}</div>
             </div>
+            <button onClick={() => setWeekOffset(weekOffset + 1)} style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#475569" }}>▶</button>
           </div>
-        )}
+          {weekOffset !== 0 && <div style={{ textAlign: "center", marginBottom: 10 }}><button onClick={() => setWeekOffset(0)} style={{ fontSize: 11, color: "#2563eb", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "4px 12px", cursor: "pointer", fontWeight: 600 }}>Today</button></div>}
 
-        {/* Table Header */}
-        <div style={{ display: "grid", gridTemplateColumns: "70px 70px 1fr 1fr 60px", gap: 8, padding: "6px 8px", background: "#f8fafc", borderRadius: 8, marginBottom: 4 }}>
-          {["Date", "Status", "Check-in", "Check-out", "Time"].map(h => (
-            <span key={h} style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
-          ))}
+          {/* Weekly Table */}
+          <div style={{ display: "grid", gridTemplateColumns: "60px 50px 1fr 1fr 60px", gap: 6, padding: "6px 8px", background: "#f8fafc", borderRadius: 8, marginBottom: 4 }}>
+            {["Date", "Day", "In", "Out", "Status"].map(h => <span key={h} style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>{h}</span>)}
+          </div>
+          {weekDates.map((dateStr, i) => {
+            const dt = new Date(dateStr + "T00:00:00");
+            const isSun = dt.getDay() === 0;
+            const isHol = holidayDates.has(dateStr);
+            const isFuture = dateStr > now.toISOString().split("T")[0];
+            const dayAtt = attendance.filter(a => a.date === dateStr && a.studentId === student.id);
+            const checkIn = dayAtt.find(a => a.type === "in");
+            const checkOut = dayAtt.find(a => a.type === "out");
+            const status = isSun ? "Sun" : isHol ? "Holiday" : isFuture ? "—" : checkIn ? "Present" : "Absent";
+            const statusColor = status === "Present" ? "#16a34a" : status === "Absent" ? "#dc2626" : status === "Holiday" ? "#d97706" : "#94a3b8";
+            const statusBg = status === "Present" ? "#f0fdf4" : status === "Absent" ? "#fff1f2" : status === "Holiday" ? "#fffbeb" : status === "Sun" ? "#faf5ff" : "#f8fafc";
+            return (
+              <div key={dateStr} style={{ display: "grid", gridTemplateColumns: "60px 50px 1fr 1fr 60px", gap: 6, padding: "10px 8px", borderBottom: i < 6 ? "1px solid #f1f5f9" : "none", alignItems: "center", background: dateStr === now.toISOString().split("T")[0] ? "#eff6ff" : "transparent", borderRadius: dateStr === now.toISOString().split("T")[0] ? 8 : 0 }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#1e293b" }}>{dt.getDate()} {dt.toLocaleDateString("en-IN", { month: "short" })}</p>
+                </div>
+                <span style={{ fontSize: 10, color: isSun ? "#7c3aed" : "#94a3b8", fontWeight: 600 }}>{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dt.getDay()]}</span>
+                <span style={{ fontSize: 11, color: "#475569" }}>{checkIn ? fmtTime(checkIn.timestamp) : "—"}</span>
+                <span style={{ fontSize: 11, color: "#475569" }}>{checkOut ? fmtTime(checkOut.timestamp) : "—"}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: statusColor, background: statusBg, padding: "3px 6px", borderRadius: 6, textAlign: "center" }}>{status === "Present" ? "P" : status === "Absent" ? "A" : status === "Holiday" ? "H" : status === "Sun" ? "S" : "—"}</span>
+              </div>
+            );
+          })}
         </div>
+      )}
 
-        {dailyRecords.length > 0 ? dailyRecords.map((row, i) => (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "70px 70px 1fr 1fr 60px", gap: 8, padding: "10px 8px", borderBottom: i < dailyRecords.length - 1 ? "1px solid #f1f5f9" : "none", alignItems: "center" }}>
-            <div>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#1e293b" }}>{row.date}</p>
-              <p style={{ margin: 0, fontSize: 10, color: "#94a3b8" }}>{row.day}</p>
+      {/* ═══ MONTHLY CALENDAR VIEW ═══ */}
+      {viewMode === "monthly" && (
+        <div style={{ background: "#fff", borderRadius: 20, padding: 18, marginTop: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
+          {/* Month Navigation */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <button onClick={() => { if (calMonth === 0) { setCalMonth(11); setCalYear(calYear - 1); } else setCalMonth(calMonth - 1); }} style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#475569" }}>◀</button>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#1e293b" }}>{new Date(calYear, calMonth).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</div>
             </div>
-            <span style={{ fontSize: 11, fontWeight: 700, color: row.status === "Present" ? "#16a34a" : row.status === "Holiday" ? "#d97706" : "#dc2626", background: row.status === "Present" ? "#f0fdf4" : row.status === "Holiday" ? "#fffbeb" : "#fff1f2", padding: "3px 8px", borderRadius: 20, textAlign: "center" }}>{row.status}</span>
-            <span style={{ fontSize: 12, color: "#475569" }}>{row.checkIn}</span>
-            <span style={{ fontSize: 12, color: "#475569" }}>{row.checkOut}</span>
-            <span style={{ fontSize: 11, color: "#64748b" }}>{row.duration}</span>
+            <button onClick={() => { if (calMonth === 11) { setCalMonth(0); setCalYear(calYear + 1); } else setCalMonth(calMonth + 1); }} style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#475569" }}>▶</button>
           </div>
-        )) : (
-          <p style={{ fontSize: 13, color: "#94a3b8", textAlign: "center", padding: 20 }}>No attendance records this month</p>
-        )}
-      </div>
+
+          {/* Month Stats */}
+          {(() => {
+            const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+            const todayStr = now.toISOString().split("T")[0];
+            let mP = 0, mA = 0, mH = 0, mW = 0;
+            for (let d = 1; d <= daysInMonth; d++) {
+              const ds = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+              if (ds > todayStr) continue;
+              const isSun = new Date(ds + "T00:00:00").getDay() === 0;
+              const isHol = holidayDates.has(ds);
+              if (isSun || isHol) { mH++; continue; }
+              mW++;
+              const hasIn = attendance.some(a => a.date === ds && a.studentId === student.id && a.type === "in");
+              if (hasIn) mP++; else mA++;
+            }
+            const mPct = mW > 0 ? Math.round((mP / mW) * 100) : 0;
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 12 }}>
+                <div style={{ textAlign: "center", padding: 6, borderRadius: 8, background: "#f0fdf4" }}><div style={{ fontSize: 16, fontWeight: 800, color: "#16a34a" }}>{mP}</div><div style={{ fontSize: 9, color: "#64748b" }}>Present</div></div>
+                <div style={{ textAlign: "center", padding: 6, borderRadius: 8, background: "#fff1f2" }}><div style={{ fontSize: 16, fontWeight: 800, color: "#dc2626" }}>{mA}</div><div style={{ fontSize: 9, color: "#64748b" }}>Absent</div></div>
+                <div style={{ textAlign: "center", padding: 6, borderRadius: 8, background: "#fffbeb" }}><div style={{ fontSize: 16, fontWeight: 800, color: "#d97706" }}>{mH}</div><div style={{ fontSize: 9, color: "#64748b" }}>Holiday</div></div>
+                <div style={{ textAlign: "center", padding: 6, borderRadius: 8, background: "#eff6ff" }}><div style={{ fontSize: 16, fontWeight: 800, color: "#2563eb" }}>{mPct}%</div><div style={{ fontSize: 9, color: "#64748b" }}>Score</div></div>
+              </div>
+            );
+          })()}
+
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 9, justifyContent: "center", flexWrap: "wrap" }}>
+            {[["P", "#dcfce7", "#16a34a"], ["A", "#fee2e2", "#dc2626"], ["H", "#fef3c7", "#d97706"], ["S", "#f3e8ff", "#7c3aed"], ["—", "#f1f5f9", "#94a3b8"]].map(([l, bg, c]) => (
+              <span key={l} style={{ display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: bg, border: `1px solid ${c}33`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 7, fontWeight: 700, color: c }}>{l}</span>{l === "P" ? "Present" : l === "A" ? "Absent" : l === "H" ? "Holiday" : l === "S" ? "Sunday" : "Future"}</span>
+            ))}
+          </div>
+
+          {/* Calendar Grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
+              <div key={d} style={{ textAlign: "center", fontSize: 9, fontWeight: 700, color: d === "Sun" ? "#dc2626" : "#94a3b8", padding: "4px 0" }}>{d}</div>
+            ))}
+            {(() => {
+              const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+              const firstDay = new Date(calYear, calMonth, 1).getDay();
+              const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+              const todayStr = now.toISOString().split("T")[0];
+              const cells = [];
+              for (let i = 0; i < startOffset; i++) cells.push(<div key={`e-${i}`} />);
+              for (let d = 1; d <= daysInMonth; d++) {
+                const ds = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                const isSun = new Date(ds + "T00:00:00").getDay() === 0;
+                const isHol = holidayDates.has(ds);
+                const isFuture = ds > todayStr;
+                const isToday = ds === todayStr;
+                const dayAtt = attendance.filter(a => a.date === ds && a.studentId === student.id);
+                const hasIn = dayAtt.some(a => a.type === "in");
+                const checkIn = dayAtt.find(a => a.type === "in");
+                const checkOut = dayAtt.find(a => a.type === "out");
+                let bg = "#f8fafc", border = "1px solid #e8eff8", color = "#94a3b8", label = "—";
+                if (isHol) { bg = "#fef3c7"; border = "1px solid #fde68a"; color = "#d97706"; label = "H"; }
+                else if (isSun) { bg = "#f3e8ff"; border = "1px solid #d8b4fe"; color = "#7c3aed"; label = "S"; }
+                else if (isFuture) { bg = "#f1f5f9"; color = "#cbd5e1"; label = "—"; }
+                else if (hasIn) { bg = "#dcfce7"; border = "1px solid #86efac"; color = "#16a34a"; label = "P"; }
+                else { bg = "#fee2e2"; border = "1px solid #fca5a5"; color = "#dc2626"; label = "A"; }
+                if (isToday) border = "2px solid #2563eb";
+                cells.push(
+                  <div key={ds} onClick={() => !isFuture && setCalSelectedDate(ds)} style={{ background: bg, border, borderRadius: 8, padding: "5px 2px", textAlign: "center", minHeight: 44, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: isFuture ? "default" : "pointer", position: "relative" }}
+                    title={checkIn ? `IN: ${fmtTime(checkIn.timestamp)}${checkOut ? " · OUT: " + fmtTime(checkOut.timestamp) : ""}` : isHol ? "Holiday" : isSun ? "Sunday" : isFuture ? "" : "Absent"}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color }}>{d}</div>
+                    <div style={{ fontSize: 8, fontWeight: 700, color }}>{label}</div>
+                    {hasIn && !isSun && !isHol && <div style={{ fontSize: 6, color: "#16a34a", marginTop: 1 }}>{checkIn ? fmtTime(checkIn.timestamp) : ""}</div>}
+                    {leaveApplications.some(la => la.date === ds) && <div style={{ position: "absolute", top: 2, right: 2, width: 6, height: 6, borderRadius: "50%", background: "#f59e0b" }} />}
+                  </div>
+                );
+              }
+              return cells;
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ LEAVE APPLICATION VIEW ═══ */}
+      {viewMode === "leave" && (
+        <div style={{ background: "#fff", borderRadius: 20, padding: 18, marginTop: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <h4 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "#1e293b" }}>Leave Application</h4>
+            {!showLeaveForm && <button onClick={() => setShowLeaveForm(true)} style={{ padding: "8px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#f59e0b,#d97706)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Apply Leave</button>}
+          </div>
+          {leaveMsg && <div style={{ padding: "10px 14px", borderRadius: 10, background: "#f0fdf4", border: "1px solid #86efac", marginBottom: 12, fontSize: 12, color: "#16a34a", fontWeight: 600 }}>{leaveMsg}</div>}
+          {showLeaveForm && (
+            <div style={{ background: "#fffbeb", borderRadius: 14, padding: 16, marginBottom: 16, border: "1.5px solid #fde68a" }}>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#78350f", display: "block", marginBottom: 4 }}>Leave Date *</label>
+                <input type="date" value={leaveForm.date} onChange={e => setLeaveForm({ ...leaveForm, date: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #fde68a", fontSize: 13, outline: "none", background: "#fff", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#78350f", display: "block", marginBottom: 4 }}>Leave Type *</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[["full_day", "Full Day"], ["half_day", "Half Day"], ["emergency", "Emergency"]].map(([val, label]) => (
+                    <button key={val} onClick={() => setLeaveForm({ ...leaveForm, leaveType: val })} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: leaveForm.leaveType === val ? "2px solid #f59e0b" : "1px solid #e2e8f0", background: leaveForm.leaveType === val ? "#fef3c7" : "#fff", color: leaveForm.leaveType === val ? "#92400e" : "#64748b", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{label}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#78350f", display: "block", marginBottom: 4 }}>Reason *</label>
+                <textarea value={leaveForm.reason} onChange={e => setLeaveForm({ ...leaveForm, reason: e.target.value })} placeholder="Leave ka reason likho (e.g. Family function, Doctor visit...)" rows={3} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #fde68a", fontSize: 12, outline: "none", resize: "none", fontFamily: "inherit", background: "#fff", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button disabled={leaveSaving} onClick={async () => {
+                  if (!leaveForm.date) { setLeaveMsg("Date select karo!"); return; }
+                  if (!leaveForm.reason?.trim()) { setLeaveMsg("Reason likho!"); return; }
+                  setLeaveSaving(true);
+                  try {
+                    await addDoc(collection(db, "leave_applications"), {
+                      studentId: student.id, studentName: student.studentName || "", studentClass: student.class || "",
+                      parentEmail: student.parentEmail || "", parentName: student.fatherName || student.motherName || "",
+                      date: leaveForm.date, leaveType: leaveForm.leaveType || "full_day", reason: leaveForm.reason.trim(),
+                      status: "pending", createdAt: serverTimestamp(),
+                    });
+                    setLeaveMsg("Leave application submitted successfully!");
+                    setLeaveForm({ date: new Date().toISOString().split("T")[0], reason: "", leaveType: "full_day" });
+                    setShowLeaveForm(false);
+                    setTimeout(() => setLeaveMsg(""), 3000);
+                  } catch (e) { setLeaveMsg("Error: " + e.message); }
+                  setLeaveSaving(false);
+                }} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#f59e0b,#d97706)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{leaveSaving ? "Submitting..." : "Submit Application"}</button>
+                <button onClick={() => { setShowLeaveForm(false); setLeaveMsg(""); }} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#64748b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              </div>
+            </div>
+          )}
+          <div style={{ marginTop: 4 }}>
+            <h5 style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: "#475569" }}>Previous Applications</h5>
+            {leaveApplications.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 24, color: "#94a3b8", fontSize: 12 }}>No leave applications yet</div>
+            ) : leaveApplications.map(la => {
+              const statusColors = { pending: ["#f59e0b", "#fffbeb", "Pending"], approved: ["#16a34a", "#f0fdf4", "Approved"], rejected: ["#dc2626", "#fff1f2", "Rejected"] };
+              const [sc, sbg, sl] = statusColors[la.status] || statusColors.pending;
+              const typeLabels = { full_day: "Full Day", half_day: "Half Day", emergency: "Emergency" };
+              return (
+                <div key={la.id} style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid #e8eff8", marginBottom: 8, background: "#fafcfe" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{la.date ? new Date(la.date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: sc, background: sbg, padding: "3px 10px", borderRadius: 99, border: "1px solid " + sc + "33" }}>{sl}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: "#7c3aed", background: "#faf5ff", padding: "2px 8px", borderRadius: 6 }}>{typeLabels[la.leaveType] || la.leaveType}</span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 12, color: "#475569", lineHeight: 1.4 }}>{la.reason}</p>
+                  {la.adminNote && <p style={{ margin: "6px 0 0", fontSize: 11, color: "#2563eb", background: "#eff6ff", padding: "6px 10px", borderRadius: 8 }}>Admin: {la.adminNote}</p>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Calendar Date Detail Popup */}
+      {calSelectedDate && (() => {
+        const dayAtt = attendance.filter(a => a.date === calSelectedDate && a.studentId === student.id);
+        const dayLeave = leaveApplications.find(la => la.date === calSelectedDate);
+        const checkIn = dayAtt.find(a => a.type === "in");
+        const checkOut = dayAtt.find(a => a.type === "out");
+        const isHol = holidayDates.has(calSelectedDate);
+        const isSun = new Date(calSelectedDate + "T00:00:00").getDay() === 0;
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setCalSelectedDate(null)}>
+            <div style={{ background: "#fff", borderRadius: 20, padding: 20, maxWidth: 340, width: "100%", boxShadow: "0 10px 40px rgba(0,0,0,.15)" }} onClick={e => e.stopPropagation()}>
+              <h4 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: "#1e293b" }}>{new Date(calSelectedDate + "T00:00:00").toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</h4>
+              {isHol ? <p style={{ fontSize: 13, color: "#d97706", fontWeight: 600 }}>Holiday</p>
+              : isSun ? <p style={{ fontSize: 13, color: "#7c3aed", fontWeight: 600 }}>Sunday</p>
+              : checkIn ? (
+                <div>
+                  <p style={{ fontSize: 13, color: "#16a34a", fontWeight: 700, margin: "0 0 6px" }}>Present</p>
+                  <p style={{ fontSize: 12, color: "#475569", margin: "0 0 3px" }}>Check-in: <strong>{fmtTime(checkIn.timestamp)}</strong></p>
+                  {checkOut && <p style={{ fontSize: 12, color: "#475569", margin: 0 }}>Check-out: <strong>{fmtTime(checkOut.timestamp)}</strong></p>}
+                </div>
+              ) : <p style={{ fontSize: 13, color: "#dc2626", fontWeight: 700, margin: "0 0 6px" }}>Absent</p>}
+              {dayLeave && (
+                <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, background: "#fffbeb", border: "1px solid #fde68a" }}>
+                  <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>Leave Application</p>
+                  <p style={{ margin: "0 0 3px", fontSize: 11, color: "#78350f" }}>Type: {dayLeave.leaveType === "full_day" ? "Full Day" : dayLeave.leaveType === "half_day" ? "Half Day" : "Emergency"}</p>
+                  <p style={{ margin: "0 0 3px", fontSize: 11, color: "#78350f" }}>Reason: {dayLeave.reason}</p>
+                  <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: dayLeave.status === "approved" ? "#16a34a" : dayLeave.status === "rejected" ? "#dc2626" : "#f59e0b" }}>Status: {dayLeave.status === "approved" ? "Approved" : dayLeave.status === "rejected" ? "Rejected" : "Pending"}</p>
+                </div>
+              )}
+              <button onClick={() => setCalSelectedDate(null)} style={{ marginTop: 12, width: "100%", padding: "10px 0", borderRadius: 10, border: "none", background: "#f1f5f9", color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Close</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* RFID Card Info */}
+      {student.rfidCode && (
+        <div style={{ background: "#f0f9ff", borderRadius: 14, padding: "12px 14px", marginTop: 14, display: "flex", alignItems: "center", gap: 10, border: "1px solid #bae6fd" }}>
+          <Icon name="rfid" size={18} color="#0369a1"/>
+          <div>
+            <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#0369a1" }}>RFID Card: {student.rfidCode}</p>
+            <p style={{ margin: "2px 0 0", fontSize: 11, color: "#64748b" }}>Auto check-in/check-out on tap</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -588,13 +817,204 @@ const ProfileScreen = ({ student, user, onLogout }) => {
   );
 };
 
+// ─── PERFORMANCE SCREEN ──────────────────────────────────────────────────────
+const PerformanceScreen = ({ student }) => {
+  const [examMarks, setExamMarks] = useState([]);
+  const [exams, setExams] = useState([]);
+  const [classmates, setClassmates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedExam, setSelectedExam] = useState(null);
+
+  useEffect(() => {
+    if (!student?.id) return;
+    setLoading(true);
+    Promise.all([
+      getDocs(query(collection(db, "exam_marks"), where("studentId", "==", student.id))),
+      getDocs(collection(db, "exams")),
+      // Saare classmates ke marks bhi laao ranking ke liye
+      getDocs(query(collection(db, "exam_marks"), where("studentClass", "==", student.class))),
+    ]).then(([marksSnap, examsSnap, classmatesSnap]) => {
+      const marks = marksSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const examsList = examsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      examsList.sort((a, b) => (b.examDate || "").localeCompare(a.examDate || ""));
+      const allClassMarks = classmatesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setExamMarks(marks);
+      setExams(examsList);
+      setClassmates(allClassMarks);
+      setLoading(false);
+    }).catch(e => { console.error(e); setLoading(false); });
+  }, [student?.id]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}><div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>Loading performance data...</div>;
+
+  // Calculate overall stats
+  const totalExams = examMarks.length;
+  const avgPct = totalExams > 0 ? Math.round(examMarks.reduce((s, m) => {
+    const exam = exams.find(e => e.id === m.examId);
+    const subjects = exam?.subjects || [];
+    const maxTotal = subjects.length * (exam?.totalMarksPerSubject || 100);
+    return s + (maxTotal > 0 ? (m.totalMarks / maxTotal) * 100 : 0);
+  }, 0) / totalExams) : 0;
+
+  // Overall class rank — sabhi exams me average percentage ke basis pe
+  const studentAvgMap = {};
+  classmates.forEach(m => {
+    const exam = exams.find(e => e.id === m.examId);
+    const subjects = exam?.subjects || [];
+    const maxTotal = subjects.length * (exam?.totalMarksPerSubject || 100);
+    const pct = maxTotal > 0 ? (m.totalMarks / maxTotal) * 100 : 0;
+    if (!studentAvgMap[m.studentId]) studentAvgMap[m.studentId] = { total: 0, count: 0, name: m.studentName };
+    studentAvgMap[m.studentId].total += pct;
+    studentAvgMap[m.studentId].count++;
+  });
+  const rankings = Object.entries(studentAvgMap).map(([id, d]) => ({
+    id, name: d.name, avgPct: Math.round(d.total / d.count)
+  })).sort((a, b) => b.avgPct - a.avgPct);
+  const myRank = rankings.findIndex(r => r.id === student.id) + 1;
+  const totalStudents = rankings.length;
+
+  return (
+    <div style={{ padding: "0 16px 20px" }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg, #4c1d95, #7c3aed)", margin: "0 -16px", padding: "20px 20px 24px", borderRadius: "0 0 24px 24px", marginBottom: 16 }}>
+        <p style={{ color: "#c4b5fd", fontSize: 12, margin: "0 0 4px", fontWeight: 500 }}>Academic Performance</p>
+        <h2 style={{ color: "#fff", fontSize: 20, fontWeight: 800, margin: 0 }}>{student.studentName}</h2>
+        <p style={{ color: "#c4b5fd", fontSize: 12, margin: "4px 0 0" }}>Class {student.class} · {student.board} · {student.medium}</p>
+      </div>
+
+      {/* Stats Cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: "#fff", borderRadius: 16, padding: 14, textAlign: "center", boxShadow: "0 2px 12px rgba(0,0,0,.06)", border: "1px solid #f1f5f9" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#2563eb" }}>{totalExams}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tests Given</div>
+        </div>
+        <div style={{ background: "#fff", borderRadius: 16, padding: 14, textAlign: "center", boxShadow: "0 2px 12px rgba(0,0,0,.06)", border: "1px solid #f1f5f9" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: avgPct >= 75 ? "#16a34a" : avgPct >= 50 ? "#d97706" : "#dc2626" }}>{avgPct}%</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>Average Score</div>
+        </div>
+        <div style={{ background: "#fff", borderRadius: 16, padding: 14, textAlign: "center", boxShadow: "0 2px 12px rgba(0,0,0,.06)", border: "1px solid #f1f5f9" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#7c3aed" }}>{myRank > 0 ? `#${myRank}` : "—"}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>Class Rank</div>
+        </div>
+      </div>
+
+      {/* Performance Graph */}
+      {examMarks.length > 0 && (
+        <div style={{ background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 2px 12px rgba(0,0,0,.06)", border: "1px solid #f1f5f9", marginBottom: 16 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 14px", color: "#1e293b" }}>📊 Performance Trend</h3>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 120, padding: "0 4px", borderBottom: "1.5px solid #f1f5f9" }}>
+            {examMarks.slice(-10).map((m, i) => {
+              const exam = exams.find(e => e.id === m.examId);
+              const subjects = exam?.subjects || [];
+              const maxTotal = subjects.length * (exam?.totalMarksPerSubject || 100);
+              const pct = maxTotal > 0 ? Math.round((m.totalMarks / maxTotal) * 100) : 0;
+              const barColor = pct >= 75 ? "#16a34a" : pct >= 50 ? "#d97706" : "#dc2626";
+              return (
+                <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: barColor }}>{pct}%</div>
+                  <div style={{ width: "100%", maxWidth: 28, height: `${Math.max(pct, 5)}px`, background: barColor, borderRadius: "4px 4px 0 0", transition: "height .3s" }} />
+                  <div style={{ fontSize: 7, color: "#94a3b8", textAlign: "center", lineHeight: 1.1 }}>{exam?.title?.slice(0, 6) || ""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Exam-wise Results */}
+      <div style={{ background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 2px 12px rgba(0,0,0,.06)", border: "1px solid #f1f5f9", marginBottom: 16 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 12px", color: "#1e293b" }}>📝 Exam Results</h3>
+        {examMarks.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 20, color: "#94a3b8", fontSize: 13 }}>Abhi tak koi test result nahi aaya.</div>
+        ) : examMarks.map((m, idx) => {
+          const exam = exams.find(e => e.id === m.examId);
+          const subjects = exam?.subjects || [];
+          const maxTotal = subjects.length * (exam?.totalMarksPerSubject || 100);
+          const pct = maxTotal > 0 ? Math.round((m.totalMarks / maxTotal) * 100) : 0;
+          // Exam-specific rank
+          const examClassMarks = classmates.filter(c => c.examId === m.examId).sort((a, b) => b.totalMarks - a.totalMarks);
+          const examRank = examClassMarks.findIndex(c => c.studentId === student.id) + 1;
+          const isExpanded = selectedExam === m.id;
+          return (
+            <div key={m.id} style={{ borderBottom: idx < examMarks.length - 1 ? "1px solid #f1f5f9" : "none" }}>
+              <div onClick={() => setSelectedExam(isExpanded ? null : m.id)} style={{ padding: "12px 0", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: pct >= 75 ? "#f0fdf4" : pct >= 50 ? "#fffbeb" : "#fef2f2", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: pct >= 75 ? "#16a34a" : pct >= 50 ? "#d97706" : "#dc2626" }}>{pct}%</span>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#1e293b" }}>{exam?.title || m.examTitle || "Test"}</div>
+                  <div style={{ fontSize: 11, color: "#94a3b8", display: "flex", gap: 8 }}>
+                    <span>{exam?.examDate || ""}</span>
+                    <span>{m.totalMarks}/{maxTotal}</span>
+                    {examRank > 0 && <span style={{ color: "#7c3aed", fontWeight: 600 }}>Rank #{examRank}/{examClassMarks.length}</span>}
+                  </div>
+                </div>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>{isExpanded ? "▲" : "▼"}</span>
+              </div>
+              {/* Subject-wise marks (expanded) */}
+              {isExpanded && m.marks && (
+                <div style={{ padding: "0 0 12px 46px" }}>
+                  {Object.entries(m.marks).map(([sub, marks]) => {
+                    const subMax = exam?.totalMarksPerSubject || 100;
+                    const subPct = subMax > 0 ? Math.round((Number(marks) / subMax) * 100) : 0;
+                    return (
+                      <div key={sub} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#475569", minWidth: 80 }}>{sub}</span>
+                        <div style={{ flex: 1, height: 6, background: "#f1f5f9", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ width: `${subPct}%`, height: "100%", background: subPct >= 75 ? "#16a34a" : subPct >= 50 ? "#d97706" : "#dc2626", borderRadius: 99 }} />
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", minWidth: 45, textAlign: "right" }}>{marks}/{subMax}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Class Ranking — sirf rank dikhega, marks/% nahi */}
+      {rankings.length > 0 && (
+        <div style={{ background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 2px 12px rgba(0,0,0,.06)", border: "1px solid #f1f5f9" }}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 12px", color: "#1e293b" }}>🏆 Class Ranking — {student.class}</h3>
+          <p style={{ fontSize: 11, color: "#94a3b8", margin: "-8px 0 12px" }}>Based on overall average across all tests</p>
+          {rankings.slice(0, 10).map((r, idx) => {
+            const isMe = r.id === student.id;
+            const medalColors = ["#fbbf24", "#94a3b8", "#cd7f32"];
+            return (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: idx < Math.min(rankings.length, 10) - 1 ? "1px solid #f8fafc" : "none", background: isMe ? "#eff6ff" : "transparent", borderRadius: isMe ? 10 : 0, padding: isMe ? "8px 10px" : "8px 0" }}>
+                <div style={{ width: 28, height: 28, borderRadius: 8, background: idx < 3 ? `${medalColors[idx]}22` : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: idx < 3 ? medalColors[idx] : "#94a3b8" }}>{idx + 1}</span>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: 13, fontWeight: isMe ? 800 : 600, color: isMe ? "#2563eb" : "#1e293b" }}>
+                    {isMe ? `${r.name} (You)` : r.name}
+                  </span>
+                </div>
+                {isMe && <span style={{ fontSize: 11, fontWeight: 700, color: "#2563eb", background: "#dbeafe", padding: "2px 8px", borderRadius: 6 }}>Rank #{idx + 1}</span>}
+              </div>
+            );
+          })}
+          {myRank > 10 && (
+            <div style={{ textAlign: "center", padding: "10px 0", fontSize: 12, color: "#7c3aed", fontWeight: 600, borderTop: "1px solid #f1f5f9", marginTop: 8 }}>
+              ... Your rank: #{myRank} out of {totalStudents}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── BOTTOM NAV ──────────────────────────────────────────────────────────────
 const BottomNav = ({ active, navigate, noticeCount }) => {
   const tabs = [
-    { id: "home",       icon: "home",       label: "Home" },
-    { id: "attendance", icon: "attendance",  label: "Attendance" },
-    { id: "notices",    icon: "bell",        label: "Notices" },
-    { id: "profile",    icon: "user",        label: "Profile" },
+    { id: "home",        icon: "home",        label: "Home" },
+    { id: "performance", icon: "trophy",      label: "Performance" },
+    { id: "attendance",  icon: "attendance",   label: "Attendance" },
+    { id: "notices",     icon: "bell",         label: "Notices" },
+    { id: "profile",     icon: "user",         label: "Profile" },
   ];
 
   return (
@@ -614,7 +1034,7 @@ const BottomNav = ({ active, navigate, noticeCount }) => {
 };
 
 // ─── MAIN APP ────────────────────────────────────────────────────────────────
-const screenTitles = { home: "PID Parent App", attendance: "Attendance", notices: "Notice Board", profile: "Student Profile" };
+const screenTitles = { home: "PID Parent App", performance: "Performance", attendance: "Attendance", notices: "Notice Board", profile: "Student Profile" };
 
 export default function ParentApp() {
   const [user, setUser] = useState(null);
@@ -627,6 +1047,7 @@ export default function ParentApp() {
   const [notices, setNotices] = useState([]);
   const [holidays, setHolidays] = useState([]);
   const [notification, setNotification] = useState(null);
+  const [leaveApplications, setLeaveApplications] = useState([]);
 
   // ═══ AUTH LISTENER ═══
   useEffect(() => {
@@ -683,6 +1104,18 @@ export default function ParentApp() {
     const unsub = onSnapshot(q, (snap) => {
       const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setAttendance(arr);
+    });
+    return () => unsub();
+  }, [student]);
+
+  // ═══ REALTIME: LEAVE APPLICATIONS ═══
+  useEffect(() => {
+    if (!student) return;
+    const q = query(collection(db, "leave_applications"), where("studentId", "==", student.id));
+    const unsub = onSnapshot(q, (snap) => {
+      const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      setLeaveApplications(arr);
     });
     return () => unsub();
   }, [student]);
@@ -784,7 +1217,8 @@ export default function ParentApp() {
       {/* Screen Content */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {screen === "home" && <DashboardScreen navigate={setScreen} student={student} attendance={attendance} notices={notices} holidays={holidays}/>}
-        {screen === "attendance" && <AttendanceScreen student={student} attendance={attendance} holidays={holidays}/>}
+        {screen === "performance" && <PerformanceScreen student={student}/>}
+        {screen === "attendance" && <AttendanceScreen student={student} attendance={attendance} holidays={holidays} leaveApplications={leaveApplications}/>}
         {screen === "notices" && <NoticesScreen notices={notices} holidays={holidays}/>}
         {screen === "profile" && <ProfileScreen student={student} user={user} onLogout={handleLogout}/>}
       </div>
