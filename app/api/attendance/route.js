@@ -32,14 +32,14 @@ if (!admin.apps.length) {
 const db = admin.apps.length ? admin.firestore() : null;
 
 // ═══════════════════════════════════════════
-// POST — RFID Device sends attendance data (REAL-TIME FIX)
+// POST — RFID Device sends attendance data
 // ═══════════════════════════════════════════
 export async function POST(request) {
   try {
     if (!db) return NextResponse.json({ error: "Database not initialized" }, { status: 500 });
 
     const body = await request.json();
-    // 1. Naya Update: 'timestamp' variable ko receive kar rahe hain
+    // 1. CHANGE: NodeMCU se aane wala 'timestamp' bhi receive karein
     const { rfidCode, type, deviceId, secret, timestamp } = body; 
 
     const apiSecret = process.env.ATTENDANCE_API_SECRET || "pid_rfid_2026";
@@ -79,7 +79,7 @@ export async function POST(request) {
       if (endDate && today > endDate) { batchValid = false; batchExpired = true; }
     }
 
-    // 2. Naya Update: Device ke offline time ko exact format mein convert kar rahe hain
+    // 2. CHANGE: Real Time Calculate Karein (Agar offline data hai to device ka time, warna server ka time)
     const exactTapTime = timestamp ? new Date(Number(timestamp)) : new Date();
 
     const record = {
@@ -93,10 +93,10 @@ export async function POST(request) {
       batchExpired: batchExpired,
       isTeacher: isTeacher,
       deviceId: deviceId || "device-1",
-      // 3. Naya Update: Server ab yahan device wala real time daalega
+      // 3. CHANGE: Niche wali dono line me exactTapTime use kiya gaya hai
       date: exactTapTime.toISOString().split("T")[0], 
       timestamp: exactTapTime.toISOString(),          
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(), // Ye batayega ki server par kis waqt sync hua
     };
 
     await db.collection("attendance").add(record);
