@@ -33,18 +33,49 @@ export default function StudentApp() {
   const [loading, setLoading] = useState(true);
   const [student, setStudent] = useState(null);
   const [studentLoading, setStudentLoading] = useState(false);
+  const [loginRole, setLoginRole] = useState(null); // "student" | "teacher" | null
+  // ── Teacher State ──
+  const [teacher, setTeacher] = useState(null);
+  const [teacherLoading, setTeacherLoading] = useState(false);
+  const [teacherTab, setTeacherTab] = useState("students");
+  const [tStudents, setTStudents] = useState([]);
+  const [tAttendance, setTAttendance] = useState([]);
+  const [tExamMarks, setTExamMarks] = useState([]);
+  const [tQuizHistory, setTQuizHistory] = useState([]);
+  const [tNotifications, setTNotifications] = useState([]);
+  const [leaveFrom, setLeaveFrom] = useState("");
+  const [leaveTo, setLeaveTo] = useState("");
+  const [leaveReason, setLeaveReason] = useState("");
+  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
+  const [myLeaves, setMyLeaves] = useState([]);
+  const [tSelectedStudent, setTSelectedStudent] = useState(null);
+  const [tSelectedClass, setTSelectedClass] = useState("all");
+  const [tNotifClass, setTNotifClass] = useState("all");
+  const [tNotifMsg, setTNotifMsg] = useState("");
+  const [tNotifType, setTNotifType] = useState("general");
+  const [editingLeave, setEditingLeave] = useState(null); // { id, fromDate, toDate, reason }
+  const [editLeaveFrom, setEditLeaveFrom] = useState("");
+  const [editLeaveTo, setEditLeaveTo] = useState("");
+  const [editLeaveReason, setEditLeaveReason] = useState("");
+  const [editLeaveSubmitting, setEditLeaveSubmitting] = useState(false);
 
   // ── App Navigation ──
   const [activeTab, setActiveTab] = useState("dashboard");
   const [aiSubTab, setAiSubTab] = useState("doubt");
   const [dark, setDark] = useState(false);
+  const [exploreExpanded, setExploreExpanded] = useState(null);
+  const [enrollContact, setEnrollContact] = useState(null);
+  const [exploreDetailCourse, setExploreDetailCourse] = useState(null);
+  const [answerLang, setAnswerLang] = useState("hinglish");
 
   // ── Global Data ──
   const [courses, setCourses] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [allAttendance, setAllAttendance] = useState([]);
   const [quizHistory, setQuizHistory] = useState([]);
   const [tests, setTests] = useState([]);
+  const [notifications, setNotifications] = useState([]);
 
   // ── Explore & My Batches State ──
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -60,7 +91,6 @@ export default function StudentApp() {
   const [isTyping, setIsTyping] = useState(false);
   const [thinkingText, setThinkingText] = useState("");
   const [showAttach, setShowAttach] = useState(false);
-  const [answerLang, setAnswerLang] = useState("hinglish");
   const [doubtSubject, setDoubtSubject] = useState("");
   const chatEndRef = useRef(null);
   const typingRef = useRef(null);
@@ -112,21 +142,124 @@ export default function StudentApp() {
   }, [student]);
 
   useEffect(() => {
-    if (!user?.email) { setStudent(null); return; }
-    setStudentLoading(true);
-    const email = user.email.toLowerCase();
-    const unsub = onSnapshot(collection(db, "students"), snap => {
-      const found = snap.docs.find(d => d.data().studentEmail?.toLowerCase() === email);
-      if (found) {
-        setStudent({ id: found.id, ...found.data(), isEnrolled: true });
-      } else {
-        setStudent({ studentName: user.displayName || "Guest Student", studentEmail: email, isEnrolled: false, class: "N/A" });
-        setActiveTab("explore");
-      }
-      setStudentLoading(false);
-    });
-    return () => unsub();
-  }, [user]);
+    if (!user?.email) { setStudent(null); setTeacher(null); return; }
+    if (loginRole === "student") {
+      setStudentLoading(true);
+      const email = user.email.toLowerCase();
+      const unsub = onSnapshot(collection(db, "students"), snap => {
+        const found = snap.docs.find(d => d.data().studentEmail?.toLowerCase() === email);
+        if (found) {
+          setStudent({ id: found.id, ...found.data(), isEnrolled: true });
+        } else {
+          setStudent({ studentName: user.displayName || "Guest Student", studentEmail: email, isEnrolled: false, class: "N/A" });
+          setActiveTab("explore");
+        }
+        setStudentLoading(false);
+      });
+      return () => unsub();
+    } else if (loginRole === "teacher") {
+      setTeacherLoading(true);
+      const email = user.email.toLowerCase();
+      const unsub = onSnapshot(collection(db, "teachers"), snap => {
+        const found = snap.docs.find(d => d.data().email?.toLowerCase() === email);
+        if (found) {
+          setTeacher({ id: found.id, ...found.data() });
+        } else {
+          setTeacher(null);
+          alert("Aapka email teacher list mein nahi hai. Admin se contact karo.");
+          signOut(auth);
+          setLoginRole(null);
+        }
+        setTeacherLoading(false);
+      });
+      return () => unsub();
+    }
+  }, [user, loginRole]);
+
+  // Teacher data listeners
+  useEffect(() => {
+    if (!teacher) return;
+    const unsubs = [];
+    const isDirector = teacher.isDirector === true;
+    const teacherClasses = (teacher.classes || "").split(/[,&]/).map(c => c.trim().replace(/class\s*/i, "")).filter(Boolean);
+    // Students — director ko saare milenge, baaki teacher ko sirf apni classes ke
+    unsubs.push(onSnapshot(collection(db, "students"), s => {
+      const all = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      const filtered = isDirector
+        ? all.filter(st => st.status === "active")
+        : all.filter(st => {
+            const stClass = (st.class || st.presentClass || "").replace(/[^0-9]/g, "");
+            return teacherClasses.some(tc => tc.replace(/[^0-9]/g, "") === stClass) && st.status === "active";
+          });
+      setTStudents(filtered);
+    }));
+    // Attendance for those students
+    unsubs.push(onSnapshot(collection(db, "attendance"), s => {
+      setTAttendance(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    }));
+    // Quiz history
+    unsubs.push(onSnapshot(collection(db, "quiz_history"), s => {
+      setTQuizHistory(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    }));
+    // Exam marks
+    unsubs.push(onSnapshot(collection(db, "exam_marks"), s => {
+      setTExamMarks(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    }));
+    // Notifications
+    unsubs.push(onSnapshot(collection(db, "scheduled_notifications"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      setTNotifications(arr);
+    }));
+    // My leaves
+    unsubs.push(onSnapshot(query(collection(db, "leave_applications"), where("teacherId", "==", teacher.id)), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.createdAt?.toDate?.() || 0) - (a.createdAt?.toDate?.() || 0));
+      setMyLeaves(arr);
+    }));
+    return () => unsubs.forEach(u => u());
+  }, [teacher]);
+
+  // Leave application submit — auto approved
+  async function submitLeave() {
+    if (!leaveFrom || !leaveReason.trim()) { alert("Date aur reason dono fill karo!"); return; }
+    setLeaveSubmitting(true);
+    try {
+      await addDoc(collection(db, "leave_applications"), {
+        teacherId: teacher.id, teacherName: teacher.name, teacherEmail: teacher.email || "",
+        teacherSubject: teacher.subject || "", fromDate: leaveFrom, toDate: leaveTo || leaveFrom,
+        reason: leaveReason.trim(), status: "approved",
+        createdAt: serverTimestamp()
+      });
+      setLeaveFrom(""); setLeaveTo(""); setLeaveReason("");
+      alert("✅ Chutti mil gayi! Leave approved ho gayi hai.");
+    } catch (e) { alert("Error: " + e.message); }
+    setLeaveSubmitting(false);
+  }
+
+  // Edit leave (within 24 hrs only)
+  async function saveEditLeave() {
+    if (!editLeaveFrom || !editLeaveReason.trim()) { alert("Date aur reason fill karo!"); return; }
+    setEditLeaveSubmitting(true);
+    try {
+      await updateDoc(doc(db, "leave_applications", editingLeave.id), {
+        fromDate: editLeaveFrom, toDate: editLeaveTo || editLeaveFrom,
+        reason: editLeaveReason.trim(), status: "approved"
+      });
+      setEditingLeave(null);
+      alert("✅ Leave update ho gayi!");
+    } catch (e) { alert("Error: " + e.message); }
+    setEditLeaveSubmitting(false);
+  }
+
+  // Delete leave (within 24 hrs only)
+  async function deleteLeave(leaveId) {
+    if (!confirm("Kya aap is leave application ko delete karna chahte ho?")) return;
+    try {
+      await deleteDoc(doc(db, "leave_applications", leaveId));
+      alert("Leave delete ho gayi.");
+    } catch (e) { alert("Error: " + e.message); }
+  }
 
   // Fetch Global Data
   useEffect(() => {
@@ -138,10 +271,16 @@ export default function StudentApp() {
       setMaterials(mats);
       setTests(mats.filter(m => m.materialType === "test"));
     }));
+    unsubs.push(onSnapshot(collection(db, "scheduled_notifications"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      setNotifications(arr.filter(n => !n.classFilter || n.classFilter === student?.class || n.classFilter === "all"));
+    }));
     if (student?.id) {
       const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
       unsubs.push(onSnapshot(query(collection(db, "attendance"), where("studentId", "==", student.id)), s => {
         const allAtt = s.docs.map(d => ({ id: d.id, ...d.data() }));
+        setAllAttendance(allAtt);
         setAttendance(allAtt.filter(a => a.date >= monthStart));
       }));
       unsubs.push(onSnapshot(query(collection(db, "quiz_history"), where("studentId", "==", student.id)), s => {
@@ -160,7 +299,24 @@ export default function StudentApp() {
   }, [student]);
 
   // ═══ CALCULATED STATS ═══
-  const attPct = attendance.length > 0 ? Math.round((attendance.filter(a => a.type === "in").length / (attendance.length / 2 || 1)) * 100) : 0;
+  // Monthly attendance: unique dates with "in" / working days so far this month
+  const monthPresentDays = new Set(attendance.filter(a => a.type === "in").map(a => a.date)).size;
+  const monthWorkingDays = (() => {
+    const now = new Date();
+    let count = 0;
+    for (let d = 1; d <= now.getDate(); d++) {
+      const ds = new Date(now.getFullYear(), now.getMonth(), d);
+      if (ds.getDay() !== 0) count++; // Sunday skip
+    }
+    return count || 1;
+  })();
+  const attPct = Math.min(100, Math.round((monthPresentDays / monthWorkingDays) * 100));
+
+  // Overall attendance: unique dates with "in" across all time / total unique attendance dates
+  const overallPresentDays = new Set(allAttendance.filter(a => a.type === "in").map(a => a.date)).size;
+  const overallTotalDays = new Set(allAttendance.map(a => a.date)).size || 1;
+  const overallAttPct = Math.min(100, Math.round((overallPresentDays / overallTotalDays) * 100));
+
   const avgQuiz = quizHistory.length > 0 ? Math.round(quizHistory.reduce((s, q) => s + (q.percentage || 0), 0) / quizHistory.length) : 0;
   const weakSubjects = [...new Set(quizHistory.filter(q => q.percentage < 60).map(q => q.subject))];
   const subjects = [...new Set(materials.map(m => m.subject).filter(Boolean))];
@@ -263,23 +419,61 @@ export default function StudentApp() {
       const si = doubtSubject ? `Subject: ${doubtSubject}` : "Any subject";
       const hist = dChat.slice(-6).map(m => `${m.role === "user" ? "Student" : "Teacher"}: ${m.text}`).join("\n");
 
-      const prompt = `You are a smart AI tutor for Class ${ci} Indian students. ${si}. Board: ${student?.board || "CG Board"}.
+      const prompt = `You are ${student?.studentName || "Student"}'s PERSONAL AI tutor at Patel Institute Dongargaon. You know this student deeply:
 
-LANGUAGE: ${langLabel}.
+═══ STUDENT PROFILE ═══
+- Name: ${student?.studentName || "Student"}
+- Class: ${ci} | Board: ${student?.board || "CG Board"} | Medium: ${student?.medium || "Hindi"}
+- Monthly Attendance: ${attPct}% (${monthPresentDays}/${monthWorkingDays} days this month)
+- Overall Attendance: ${overallAttPct}%
+- Average Quiz Score: ${avgQuiz}%
+- Total Quizzes Taken: ${quizHistory.length}
+- Weak Subjects: ${weakSubjects.length ? weakSubjects.join(", ") : "None identified yet"}
+- Strong Subjects: ${[...new Set(quizHistory.filter(q => (q.percentage || 0) >= 75).map(q => q.subject))].join(", ") || "Building up"}
+- Recent Quiz Performance: ${quizHistory.slice(0, 3).map(q => q.subject + " " + (q.percentage || 0) + "%").join(", ") || "No recent quizzes"}
 
-RESPONSE RULES (VERY IMPORTANT):
-- Simple factual questions → 1-3 lines max, direct answer
-- Definition questions → 2-4 lines, crisp definition + one example
-- Solve/calculate questions → step-by-step solution, numbered steps
-- Explain/concept questions → 4-8 lines with key points as bullet points (•)
-- NEVER over-explain. Be concise and clear like a smart tutor, not a textbook
-- Use **bold** for key terms/formulas only
-- If image attached, analyze and solve based on image
-- End with a quick tip or memory trick if relevant (1 line max)
+═══ YOUR TEACHING PERSONALITY ═══
+You are like a brilliant elder brother/sister (bhaiya/didi) who explains things in a fun, relatable way.
+- ${si}
+- Language: ${langLabel}
 
-Student Profile: ${student?.studentName}, Attendance: ${attPct}%, Avg Score: ${avgQuiz}%, Weak Areas: ${weakSubjects.join(", ") || "None"}.
+═══ RESPONSE INTELLIGENCE (CRITICAL) ═══
+Adapt your answer LENGTH and DEPTH based on what the student asked:
 
-${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image and solve/explain it."}`;
+IF simple fact/definition → 2-4 lines. Direct answer. No unnecessary explanation.
+   Example: "Newton ka 3rd law kya hai?" → Short, crisp, done.
+
+IF solve/calculate → Full step-by-step numbered solution. Show every step clearly. Circle the final answer.
+   Example: "2x+5=15 solve karo" → Step 1, Step 2... **Answer: x = 5** ✓
+
+IF explain/concept → 5-15 lines. Build the concept from scratch.
+   - Start with WHY this concept matters (1 line real-life connection)
+   - Explain the core idea simply
+   - Give a real-life Indian example (cricket, chai, market, train, phone — whatever fits)
+   - End with a memory trick or formula shortcut
+   Example: "Photosynthesis explain karo" → Detailed with sunlight-plant-food analogy
+
+IF doubt on weak subject (${weakSubjects.join(", ") || "none"}) → Be EXTRA careful:
+   - Assume student has gaps in basics
+   - Explain from fundamentals, don't skip steps
+   - Use Feynman technique (explain like teaching a 10-year-old)
+   - Add 1-2 practice questions at the end
+
+IF student scores low (avg ${avgQuiz}%) → Be encouraging. Never say "ye easy hai." 
+   - Celebrate small understanding: "Bahut accha! Ab samajh aa raha hai 🎯"
+   - Build confidence while teaching
+
+IF image attached → Analyze carefully. Solve step-by-step. If handwriting is unclear, mention what you see.
+
+═══ FORMATTING RULES ═══
+- Use **bold** for key terms, formulas, and important words
+- Use numbered steps (1. 2. 3.) for solutions
+- Use bullet points (•) for listing concepts
+- Use real-life examples from Indian context when relevant
+- End tricky topics with: "💡 Yaad rakhne ka trick: ..." (1 line memory aid)
+- If student asks follow-up, remember the conversation context below
+
+${hist ? `═══ CONVERSATION SO FAR ═══\n${hist}\n\n` : ""}Student asks: ${msgText || "Analyze this image and solve/explain it."}`;
 
       let result;
       if (imgData) {
@@ -420,7 +614,7 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
     </div>
   );
 
-  if (!user) return (
+  if (!user || !loginRole) return (
     <div style={{ background: "linear-gradient(150deg, #070D1A 0%, #0C1F36 50%, #162544 100%)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Nunito', 'Inter', sans-serif" }}>
       <style>{`@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}@keyframes glow{0%,100%{box-shadow:0 0 20px rgba(212,168,67,0.15)}50%{box-shadow:0 0 40px rgba(212,168,67,0.3)}}`}</style>
       <div style={{ background: "linear-gradient(145deg, #111B2E, #0C1F36)", padding: "48px 36px", borderRadius: 28, maxWidth: 400, width: "92%", textAlign: "center", border: "1px solid #1C2D45", boxShadow: "0 25px 60px rgba(0,0,0,0.5)", animation: "glow 3s ease-in-out infinite" }}>
@@ -428,25 +622,595 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
           <img src="/pid_logo.png" alt="PID" style={{ width: 52, height: 52, borderRadius: 12 }} onError={e => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'flex'); }} />
           <span style={{ display: "none", color: "#0C1F36", fontWeight: 900, fontSize: "1.4rem" }}>PID</span>
         </div>
-        <h1 style={{ color: "#E8EDF5", fontSize: "1.7rem", fontWeight: 800, margin: "0 0 6px", fontFamily: "'Nunito', sans-serif", letterSpacing: "-0.5px" }}>Student App</h1>
+        <h1 style={{ color: "#E8EDF5", fontSize: "1.7rem", fontWeight: 800, margin: "0 0 6px", fontFamily: "'Nunito', sans-serif", letterSpacing: "-0.5px" }}>PID App</h1>
         <p style={{ color: "#D4A843", fontSize: ".85rem", fontWeight: 700, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "2px" }}>Patel Institute Dongargaon</p>
-        <p style={{ color: "#6B7F99", fontSize: ".85rem", marginBottom: 32, lineHeight: 1.6 }}>Admission wali Gmail ID se login karo to access batches, AI tools & more.</p>
-        <button
-          onClick={() => signInWithPopup(auth, googleProvider).catch((err) => console.log("Popup closed", err))}
-          style={{ width: "100%", padding: "16px", borderRadius: 16, background: "#E8EDF5", color: "#0C1F36", border: "none", fontSize: "1rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "transform 0.2s, box-shadow 0.2s" }}
-          onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.3)"; }}
-          onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
-        >
-          <I n="google" cls="fab" c="#EA4335" s={20} /> Continue with Google
-        </button>
+        <p style={{ color: "#6B7F99", fontSize: ".85rem", marginBottom: 28, lineHeight: 1.6 }}>Login karo apni registered Gmail ID se</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <button onClick={() => { setLoginRole("student"); if (!user) signInWithPopup(auth, googleProvider).catch(console.log); }}
+            style={{ width: "100%", padding: "16px", borderRadius: 16, background: "#E8EDF5", color: "#0C1F36", border: "none", fontSize: "1rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+            <I n="user-graduate" s={20} c="#1349A8" /> Student Login
+          </button>
+          <button onClick={() => { setLoginRole("teacher"); if (!user) signInWithPopup(auth, googleProvider).catch(console.log); }}
+            style={{ width: "100%", padding: "16px", borderRadius: 16, background: "transparent", color: "#D4A843", border: "2px solid #D4A843", fontSize: "1rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+            <I n="chalkboard-teacher" s={20} c="#D4A843" /> Teacher Login
+          </button>
+        </div>
       </div>
     </div>
   );
 
-  if (studentLoading || !student) return (
-    <div style={{ height: "100vh", background: dark ? "#0B1120" : "#F0F4FA", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', sans-serif" }}>
-      <I n="spinner" cls="fa-spin" s={40} c={dark ? "#D4A843" : "#1349A8"} />
-      <p style={{ color: dark ? "#E8EDF5" : "#0B1826", fontWeight: 600, marginTop: 16 }}>Loading your profile...</p>
+  if (studentLoading || teacherLoading) return (
+    <div style={{ height: "100vh", background: "#0B1120", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', sans-serif" }}>
+      <I n="spinner" cls="fa-spin" s={40} c="#D4A843" />
+      <p style={{ color: "#E8EDF5", fontWeight: 600, marginTop: 16 }}>Loading your profile...</p>
+    </div>
+  );
+
+  // ═══ TEACHER DASHBOARD ═══
+  if (loginRole === "teacher" && teacher) {
+    const myStudentIds = new Set(tStudents.map(s => s.id));
+    const today = new Date().toISOString().split("T")[0];
+    return (
+      <div style={{ background: "#F0F4FA", minHeight: "100vh", fontFamily: "'Inter', 'DM Sans', sans-serif", maxWidth: 480, margin: "0 auto" }}>
+        {/* Teacher Header */}
+        <div style={{ background: "#0C1F36", padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: "linear-gradient(135deg, #D4A843, #B8912E)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+              {teacher.photo ? <img src={teacher.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <I n="chalkboard-teacher" s={18} c="#fff" />}
+            </div>
+            <div><h3 style={{ margin: 0, fontSize: ".95rem", fontWeight: 800, color: "#E8EDF5" }}>{teacher.name}</h3><p style={{ margin: 0, fontSize: ".65rem", color: "#6B7F99" }}>{teacher.subject} · {teacher.classes || "All Classes"}</p></div>
+          </div>
+          <button onClick={() => { signOut(auth); setLoginRole(null); setTeacher(null); }} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.15)", color: "#9FB8CF", padding: "6px 12px", borderRadius: 8, fontSize: ".72rem", cursor: "pointer" }}>Logout</button>
+        </div>
+
+        {/* Teacher Tabs */}
+        <div style={{ display: "flex", gap: 4, padding: "12px 16px", overflowX: "auto" }}>
+          {[{ id: "students", l: "Students", i: "users" }, { id: "notify", l: "Notify", i: "bell" }, { id: "leave", l: "Leave", i: "calendar-minus" }].map(t => (
+            <button key={t.id} onClick={() => { setTeacherTab(t.id); setTSelectedStudent(null); }} style={{ padding: "8px 16px", borderRadius: 12, border: `1.5px solid ${teacherTab === t.id ? "#1349A8" : "#D4DEF0"}`, background: teacherTab === t.id ? "#1349A8" : "#fff", color: teacherTab === t.id ? "#fff" : "#4A5E78", fontSize: ".78rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}><I n={t.i} s={12} /> {t.l}</button>
+          ))}
+        </div>
+
+        <div style={{ padding: "0 16px 100px" }}>
+          {/* ═══ STUDENTS PERFORMANCE — Class-wise + Board/Medium Partition ═══ */}
+          {teacherTab === "students" && !tSelectedStudent && (() => {
+            // Build unique class list from teacher's students
+            const classNums = [...new Set(tStudents.map(st => st.class || st.presentClass).filter(Boolean))].sort((a, b) => {
+              const n1 = parseInt(a), n2 = parseInt(b);
+              return isNaN(n1) || isNaN(n2) ? a.localeCompare(b) : n1 - n2;
+            });
+
+            // Filter students by selected class
+            const classFiltered = tSelectedClass === "all" ? tStudents : tStudents.filter(st => (st.class || st.presentClass) === tSelectedClass);
+
+            // Group by board+medium
+            const groups = {};
+            classFiltered.forEach(st => {
+              const board = st.board || "CG Board";
+              const medium = st.medium || "Hindi";
+              const key = `${board}__${medium}`;
+              if (!groups[key]) groups[key] = { board, medium, students: [] };
+              groups[key].students.push(st);
+            });
+
+            // Board colors
+            const boardColors = { "CG Board": "#1349A8", "CBSE": "#D98D04", "ICSE": "#7C3AED", "MP Board": "#059669" };
+
+            return (
+              <div>
+                {/* Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "8px 0 12px" }}>
+                  <div>
+                    <h3 style={{ fontSize: "1rem", fontWeight: 800, margin: "0 0 3px" }}>
+                      {teacher.isDirector ? "All Students" : "My Students"} ({tStudents.length})
+                    </h3>
+                    {teacher.isDirector && <span style={{ fontSize: ".62rem", color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>👑 Director — Sabhi Classes</span>}
+                  </div>
+                  <span style={{ fontSize: ".72rem", color: "#6B7F99", background: "#F0F4FA", padding: "4px 10px", borderRadius: 8, fontWeight: 600 }}>
+                    {classFiltered.length} showing
+                  </span>
+                </div>
+
+                {/* Class Filter Buttons */}
+                <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 8, marginBottom: 14 }}>
+                  {[{ id: "all", label: `All (${tStudents.length})` }, ...classNums.map(c => ({ id: c, label: `Class ${c}` }))].map(btn => (
+                    <button key={btn.id} onClick={() => setTSelectedClass(btn.id)}
+                      style={{ padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${tSelectedClass === btn.id ? "#1349A8" : "#D4DEF0"}`, background: tSelectedClass === btn.id ? "#1349A8" : "#fff", color: tSelectedClass === btn.id ? "#fff" : "#4A5E78", fontSize: ".72rem", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+
+                {tStudents.length === 0 ? (
+                  <p style={{ color: "#6B7F99", fontSize: ".82rem", textAlign: "center", padding: 30 }}>Koi student nahi mila aapki classes mein</p>
+                ) : classFiltered.length === 0 ? (
+                  <p style={{ color: "#6B7F99", fontSize: ".82rem", textAlign: "center", padding: 30 }}>Is class mein koi student nahi</p>
+                ) : Object.values(groups).map(group => {
+                  const boardColor = boardColors[group.board] || "#1349A8";
+                  return (
+                    <div key={`${group.board}__${group.medium}`} style={{ marginBottom: 20 }}>
+                      {/* Group Header — Board + Medium */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <div style={{ height: 2, flex: 1, background: `${boardColor}30`, borderRadius: 2 }} />
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <span style={{ padding: "3px 10px", borderRadius: 20, background: `${boardColor}15`, color: boardColor, fontSize: ".65rem", fontWeight: 800, border: `1px solid ${boardColor}30` }}>{group.board}</span>
+                          <span style={{ padding: "3px 10px", borderRadius: 20, background: "#F5F0FF", color: "#7C3AED", fontSize: ".65rem", fontWeight: 700, border: "1px solid #DDD6FE" }}>{group.medium} Medium</span>
+                          <span style={{ fontSize: ".6rem", color: "#9FB8CF", fontWeight: 600 }}>{group.students.length} students</span>
+                        </div>
+                        <div style={{ height: 2, flex: 1, background: `${boardColor}30`, borderRadius: 2 }} />
+                      </div>
+
+                      {/* Students in this group */}
+                      {group.students.map(st => {
+                        const stAtt = tAttendance.filter(a => a.studentId === st.id && a.type === "in");
+                        const stPresent = new Set(stAtt.map(a => a.date)).size;
+                        const stTotal = new Set(tAttendance.filter(a => a.studentId === st.id).map(a => a.date)).size || 1;
+                        const attPct = Math.min(100, Math.round((stPresent / stTotal) * 100));
+                        const stQuiz = tQuizHistory.filter(q => q.studentId === st.id);
+                        const avgQ = stQuiz.length > 0 ? Math.round(stQuiz.reduce((s, q) => s + (q.percentage || 0), 0) / stQuiz.length) : 0;
+                        const attColor = attPct >= 75 ? "#16A34A" : attPct >= 50 ? "#D98D04" : "#DC2626";
+                        const quizColor = avgQ >= 70 ? "#16A34A" : avgQ >= 50 ? "#D98D04" : "#DC2626";
+                        return (
+                          <div key={st.id} onClick={() => setTSelectedStudent(st)}
+                            style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: "12px 14px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", transition: "box-shadow 0.2s" }}>
+                            {/* Avatar */}
+                            <div style={{ width: 42, height: 42, borderRadius: 12, background: `linear-gradient(135deg, ${boardColor}, ${boardColor}AA)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+                              {st.photo ? <img src={st.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 800, fontSize: ".9rem" }}>{(st.studentName || "S").charAt(0)}</span>}
+                            </div>
+                            {/* Info */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <h4 style={{ margin: 0, fontSize: ".85rem", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st.studentName}</h4>
+                              <p style={{ margin: "2px 0 0", fontSize: ".62rem", color: "#6B7F99" }}>
+                                Class {st.class || st.presentClass} · Roll {st.rollNumber || st.rollNo || "—"}
+                              </p>
+                            </div>
+                            {/* Stats */}
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <div style={{ textAlign: "center" }}>
+                                <div style={{ fontSize: ".75rem", fontWeight: 800, color: attColor }}>{attPct}%</div>
+                                <div style={{ fontSize: ".52rem", color: "#9FB8CF" }}>Att.</div>
+                              </div>
+                              <div style={{ textAlign: "center" }}>
+                                <div style={{ fontSize: ".75rem", fontWeight: 800, color: quizColor }}>{avgQ}%</div>
+                                <div style={{ fontSize: ".52rem", color: "#9FB8CF" }}>Quiz</div>
+                              </div>
+                            </div>
+                            <I n="chevron-right" s={11} c="#D4DEF0" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* Student Detail — Full Performance View */}
+          {teacherTab === "students" && tSelectedStudent && (() => {
+            const st = tSelectedStudent;
+            const stAtt = tAttendance.filter(a => a.studentId === st.id);
+            const stPresent = new Set(stAtt.filter(a => a.type === "in").map(a => a.date)).size;
+            const stTotal = new Set(stAtt.map(a => a.date)).size || 1;
+            const stAttPct = Math.min(100, Math.round((stPresent / stTotal) * 100));
+            // This month attendance
+            const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}-01`;
+            const stMonthAtt = stAtt.filter(a => a.type === "in" && a.date >= monthStart);
+            const stMonthPresent = new Set(stMonthAtt.map(a => a.date)).size;
+            const stQuiz = tQuizHistory.filter(q => q.studentId === st.id).sort((a,b) => (b.createdAt?.toDate?.() || 0) - (a.createdAt?.toDate?.() || 0));
+            const avgQ = stQuiz.length > 0 ? Math.round(stQuiz.reduce((s, q) => s + (q.percentage || 0), 0) / stQuiz.length) : 0;
+            const stMarks = tExamMarks.filter(m => m.studentId === st.id);
+            const attColor = stAttPct >= 75 ? "#16A34A" : stAttPct >= 50 ? "#D98D04" : "#DC2626";
+            const quizColor = avgQ >= 70 ? "#16A34A" : avgQ >= 50 ? "#D98D04" : "#DC2626";
+            const boardColors = { "CG Board": "#1349A8", "CBSE": "#D98D04", "ICSE": "#7C3AED", "MP Board": "#059669" };
+            const boardColor = boardColors[st.board] || "#1349A8";
+
+            // Subject-wise quiz breakdown
+            const subjectQuizMap = {};
+            stQuiz.forEach(q => {
+              if (!subjectQuizMap[q.subject]) subjectQuizMap[q.subject] = [];
+              subjectQuizMap[q.subject].push(q.percentage || 0);
+            });
+            const subjectAvgs = Object.entries(subjectQuizMap).map(([sub, pcts]) => ({
+              sub, avg: Math.round(pcts.reduce((a,b) => a+b, 0) / pcts.length), count: pcts.length
+            })).sort((a,b) => b.avg - a.avg);
+
+            // Recent attendance dates
+            const recentDates = [...new Set(stAtt.map(a => a.date))].sort().reverse().slice(0, 7);
+
+            return (
+              <div>
+                {/* Back Button */}
+                <button onClick={() => setTSelectedStudent(null)} style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 10, padding: "8px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer", color: "#6B7F99", fontSize: ".8rem" }}>
+                  <I n="arrow-left" s={12} /> Back to Students
+                </button>
+
+                {/* Profile Card */}
+                <div style={{ background: `linear-gradient(135deg, #0C1F36, #1A3A5C)`, borderRadius: 18, padding: 20, color: "#fff", marginBottom: 14, position: "relative", overflow: "hidden" }}>
+                  <div style={{ position: "absolute", right: -20, top: -20, width: 100, height: 100, borderRadius: "50%", background: `${boardColor}20` }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                    <div style={{ width: 54, height: 54, borderRadius: 14, background: `linear-gradient(135deg, ${boardColor}, ${boardColor}AA)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+                      {st.photo ? <img src={st.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontWeight: 900, fontSize: "1.3rem" }}>{(st.studentName || "S").charAt(0)}</span>}
+                    </div>
+                    <div>
+                      <h3 style={{ margin: "0 0 3px", fontSize: "1.05rem", fontWeight: 800 }}>{st.studentName}</h3>
+                      <p style={{ margin: "0 0 2px", fontSize: ".72rem", opacity: .8 }}>Class {st.class || st.presentClass} · Roll {st.rollNumber || st.rollNo || "—"}</p>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 6, background: `${boardColor}40`, color: "#fff", fontSize: ".6rem", fontWeight: 700, border: `1px solid ${boardColor}60` }}>{st.board || "CG Board"}</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 6, background: "rgba(255,255,255,0.12)", color: "#fff", fontSize: ".6rem", fontWeight: 600 }}>{st.medium || "Hindi"} Medium</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 6, background: st.status === "active" ? "rgba(16,185,129,0.25)" : "rgba(239,68,68,0.25)", color: st.status === "active" ? "#6EE7B7" : "#FCA5A5", fontSize: ".6rem", fontWeight: 700 }}>{st.status === "active" ? "● Active" : "● Inactive"}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4 Stats Cards */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                  {[
+                    ["Overall Att.", stAttPct + "%", attColor, "calendar-check"],
+                    ["This Month", stMonthPresent + " days", "#2563EB", "calendar-alt"],
+                    ["Quiz Avg", avgQ + "%", quizColor, "brain"],
+                    ["Exams Done", String(stMarks.length), "#D98D04", "file-alt"],
+                  ].map(([l, v, c, ic]) => (
+                    <div key={l} style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: "14px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: `${c}15`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <I n={ic} s={16} c={c} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "1rem", fontWeight: 800, color: c }}>{v}</div>
+                        <div style={{ fontSize: ".6rem", color: "#6B7F99", marginTop: 1 }}>{l}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Recent Attendance Strip */}
+                {recentDates.length > 0 && (
+                  <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 10px", fontSize: ".82rem", fontWeight: 800, color: "#0C1F36" }}><I n="calendar-check" s={12} c="#16A34A" /> Recent Attendance (Last 7 days)</h4>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {recentDates.map(d => {
+                        const hasIn = stAtt.some(a => a.date === d && a.type === "in");
+                        const dt = new Date(d + "T00:00:00");
+                        return (
+                          <div key={d} style={{ textAlign: "center", padding: "6px 8px", borderRadius: 10, background: hasIn ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${hasIn ? "#86EFAC" : "#FCA5A5"}`, minWidth: 40 }}>
+                            <div style={{ fontSize: ".55rem", color: "#9FB8CF", marginBottom: 1 }}>{["Su","Mo","Tu","We","Th","Fr","Sa"][dt.getDay()]}</div>
+                            <div style={{ fontSize: ".7rem", fontWeight: 800, color: hasIn ? "#16A34A" : "#DC2626" }}>{hasIn ? "P" : "A"}</div>
+                            <div style={{ fontSize: ".52rem", color: "#9FB8CF" }}>{dt.getDate()}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Subject-wise Quiz Performance */}
+                {subjectAvgs.length > 0 && (
+                  <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 12px", fontSize: ".82rem", fontWeight: 800, color: "#0C1F36" }}><I n="chart-bar" s={12} c="#2563EB" /> Subject-wise Performance</h4>
+                    {subjectAvgs.map(({ sub, avg, count }) => {
+                      const barColor = avg >= 70 ? "#16A34A" : avg >= 50 ? "#D98D04" : "#DC2626";
+                      return (
+                        <div key={sub} style={{ marginBottom: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                            <span style={{ fontSize: ".78rem", fontWeight: 600 }}>{sub}</span>
+                            <span style={{ fontSize: ".72rem", fontWeight: 800, color: barColor }}>{avg}% <span style={{ color: "#9FB8CF", fontWeight: 500 }}>({count} quiz)</span></span>
+                          </div>
+                          <div style={{ height: 7, background: "#E8EFF8", borderRadius: 99, overflow: "hidden" }}>
+                            <div style={{ width: `${avg}%`, height: "100%", background: barColor, borderRadius: 99, transition: "width 0.8s ease" }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Recent Quizzes */}
+                {stQuiz.length > 0 && (
+                  <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 10px", fontSize: ".82rem", fontWeight: 800, color: "#0C1F36" }}><I n="brain" s={12} c="#7C3AED" /> Recent Quizzes</h4>
+                    {stQuiz.slice(0, 8).map((q, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < Math.min(stQuiz.length, 8) - 1 ? "1px solid #E8EFF8" : "none" }}>
+                        <div>
+                          <span style={{ fontSize: ".78rem", fontWeight: 600 }}>{q.subject}</span>
+                          {q.chapter && <span style={{ fontSize: ".65rem", color: "#9FB8CF" }}> · {q.chapter}</span>}
+                          <div style={{ fontSize: ".6rem", color: "#9FB8CF" }}>{q.difficulty || "medium"} · {q.totalQuestions || 0} Qs</div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <span style={{ fontSize: ".82rem", fontWeight: 800, color: (q.percentage || 0) >= 70 ? "#16A34A" : (q.percentage || 0) >= 50 ? "#D98D04" : "#DC2626" }}>{q.percentage || 0}%</span>
+                          <div style={{ fontSize: ".6rem", color: "#9FB8CF" }}>{q.grade || ""}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Exam Marks */}
+                {stMarks.length > 0 && (
+                  <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 10px", fontSize: ".82rem", fontWeight: 800, color: "#0C1F36" }}><I n="file-alt" s={12} c="#D98D04" /> Exam Results</h4>
+                    {stMarks.slice(0, 5).map((m, i) => {
+                      const totalMax = m.totalMax || 100;
+                      const pct = Math.round(((m.totalMarks || 0) / totalMax) * 100);
+                      const pctColor = pct >= 75 ? "#16A34A" : pct >= 50 ? "#D98D04" : "#DC2626";
+                      return (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < Math.min(stMarks.length, 5) - 1 ? "1px solid #E8EFF8" : "none" }}>
+                          <div>
+                            <span style={{ fontSize: ".78rem", fontWeight: 600 }}>{m.examTitle || m.examId || "Exam"}</span>
+                            <div style={{ fontSize: ".6rem", color: "#9FB8CF" }}>{m.examDate || ""}</div>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <span style={{ fontSize: ".82rem", fontWeight: 800, color: pctColor }}>{m.totalMarks || 0}/{totalMax}</span>
+                            <div style={{ fontSize: ".6rem", color: pctColor }}>{pct}%</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Contact Actions */}
+                <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+                  {st.studentPhone && <a href={`tel:${st.studentPhone}`} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px", background: "#1349A8", color: "#fff", borderRadius: 12, textDecoration: "none", fontSize: ".82rem", fontWeight: 700 }}><I n="phone" s={13} c="#fff" /> Call Student</a>}
+                  {st.fatherPhone && <a href={`tel:${st.fatherPhone}`} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px", background: "#059669", color: "#fff", borderRadius: 12, textDecoration: "none", fontSize: ".82rem", fontWeight: 700 }}><I n="phone-alt" s={13} c="#fff" /> Call Parent</a>}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ═══ SEND NOTIFICATION — PID Official Class Structure ═══ */}
+          {teacherTab === "notify" && (() => {
+            const isDirector = teacher.isDirector === true;
+            const notifMsg = tNotifMsg;
+            const setNotifMsg = setTNotifMsg;
+            const notifType = tNotifType;
+            const setNotifType = setTNotifType;
+
+            // PID Official Batch Structure — image ke according
+            const PID_BATCHES = [
+              { id: "all", label: "All Classes", shortLabel: "All", color: "#0C1F36", desc: "Sabhi students" },
+              // Class 12
+              { id: "12-eng-cbse-icse", label: "12th English (CBSE+ICSE)", shortLabel: "12 Eng\nCBSE+ICSE", color: "#1349A8", class: "12th", medium: "English", boards: ["CBSE", "ICSE"] },
+              { id: "12-hindi-cg-cbse", label: "12th Hindi (CG+CBSE)", shortLabel: "12 Hindi\nCG+CBSE", color: "#2A6FE0", class: "12th", medium: "Hindi", boards: ["CG Board", "CBSE"] },
+              { id: "12-eng-cg", label: "12th English (CG Board)", shortLabel: "12 Eng\nCG", color: "#3B82F6", class: "12th", medium: "English", boards: ["CG Board"] },
+              // Class 11
+              { id: "11-eng-cbse-icse", label: "11th English (CBSE+ICSE)", shortLabel: "11 Eng\nCBSE+ICSE", color: "#059669", class: "11th", medium: "English", boards: ["CBSE", "ICSE"] },
+              { id: "11-hindi-cg-cbse", label: "11th Hindi (CG+CBSE)", shortLabel: "11 Hindi\nCG+CBSE", color: "#16A34A", class: "11th", medium: "Hindi", boards: ["CG Board", "CBSE"] },
+              { id: "11-eng-cg", label: "11th English (CG Board)", shortLabel: "11 Eng\nCG", color: "#4ADE80", class: "11th", medium: "English", boards: ["CG Board"] },
+              // Class 10
+              { id: "10-eng-all", label: "10th English (CG+CBSE+ICSE)", shortLabel: "10 Eng\nAll Boards", color: "#7C3AED", class: "10th", medium: "English", boards: ["CG Board", "CBSE", "ICSE"] },
+              { id: "10-hindi-cg-cbse", label: "10th Hindi (CG+CBSE)", shortLabel: "10 Hindi\nCG+CBSE", color: "#A78BFA", class: "10th", medium: "Hindi", boards: ["CG Board", "CBSE"] },
+              // Class 9
+              { id: "9-eng-all", label: "9th English (CG+CBSE+ICSE)", shortLabel: "9 Eng\nAll Boards", color: "#D98D04", class: "9th", medium: "English", boards: ["CG Board", "CBSE", "ICSE"] },
+              { id: "9-hindi-cg-cbse", label: "9th Hindi (CG+CBSE)", shortLabel: "9 Hindi\nCG+CBSE", color: "#F5AC10", class: "9th", medium: "Hindi", boards: ["CG Board", "CBSE"] },
+              // Lower + Special
+              { id: "2-8-all", label: "Class 2nd–8th (All Medium)", shortLabel: "2–8\nAll", color: "#DC2626", class: "2-8", medium: "All", boards: ["CG Board", "CBSE", "ICSE"] },
+              { id: "navodaya", label: "Navodaya Entrance", shortLabel: "Navo-\ndaya", color: "#0891B2", class: "Navodaya", medium: "All", boards: [] },
+              { id: "prayas", label: "Prayas Awasiya", shortLabel: "Prayas", color: "#0E7490", class: "Prayas", medium: "All", boards: [] },
+              { id: "jee-neet", label: "IIT-JEE & NEET (9–12)", shortLabel: "JEE\nNEET", color: "#BE185D", class: "JEE-NEET", medium: "All", boards: [] },
+            ];
+
+            // Teacher ke liye sirf relevant batches dikhao (unki classes ke based on)
+            // Director ko saare dikhenge
+            const teacherClassNums = (teacher.classes || "").split(/[,&]/).map(c => c.trim().replace(/class\s*/i, "").replace(/th/i, "").trim()).filter(Boolean);
+
+            const visibleBatches = isDirector ? PID_BATCHES : PID_BATCHES.filter(b => {
+              if (b.id === "all") return true;
+              if (!b.class) return false;
+              if (b.class === "JEE-NEET") return teacherClassNums.some(tc => ["9","10","11","12"].includes(tc));
+              if (b.class === "Navodaya" || b.class === "Prayas" || b.class === "2-8") return teacherClassNums.some(tc => ["2","3","4","5","6","7","8","navodaya","prayas"].includes(tc.toLowerCase()));
+              const bClass = b.class.replace(/th/i, "");
+              return teacherClassNums.includes(bClass);
+            });
+
+            // Count students for selected batch
+            const selectedBatch = PID_BATCHES.find(b => b.id === tNotifClass);
+            const matchedStudents = tNotifClass === "all" ? tStudents : tStudents.filter(st => {
+              if (!selectedBatch || !selectedBatch.class) return false;
+              if (selectedBatch.class === "JEE-NEET") {
+                const cls = parseInt(st.class || st.presentClass || "0");
+                return cls >= 9 && cls <= 12;
+              }
+              if (selectedBatch.class === "2-8") {
+                const cls = parseInt(st.class || st.presentClass || "0");
+                return cls >= 2 && cls <= 8;
+              }
+              if (selectedBatch.class === "Navodaya" || selectedBatch.class === "Prayas") {
+                return (st.class || "").toLowerCase().includes(selectedBatch.class.toLowerCase());
+              }
+              // Class match
+              const stClassNum = (st.class || st.presentClass || "").replace(/[^0-9]/g, "");
+              const batchClassNum = selectedBatch.class.replace(/[^0-9]/g, "");
+              if (stClassNum !== batchClassNum) return false;
+              // Medium match
+              if (selectedBatch.medium !== "All" && st.medium && st.medium !== selectedBatch.medium) return false;
+              // Board match
+              if (selectedBatch.boards && selectedBatch.boards.length > 0 && st.board && !selectedBatch.boards.includes(st.board)) return false;
+              return true;
+            });
+
+            return (
+              <div>
+                {/* Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "8px 0 14px" }}>
+                  <h3 style={{ fontSize: "1rem", fontWeight: 800, margin: 0 }}>Send Notification</h3>
+                  {isDirector && <span style={{ fontSize: ".62rem", background: "#FFFBEB", color: "#92400E", border: "1px solid #FDE68A", padding: "3px 8px", borderRadius: 6, fontWeight: 700 }}>👑 Director</span>}
+                </div>
+
+                {/* PID Batch Selector Grid */}
+                <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+                  <p style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", margin: "0 0 10px" }}>📚 Batch Select Karo (Kis class ko bhejna hai?)</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+                    {visibleBatches.map(b => {
+                      const isSelected = tNotifClass === b.id;
+                      return (
+                        <button key={b.id} onClick={() => setTNotifClass(b.id)}
+                          style={{
+                            padding: "8px 4px", borderRadius: 10,
+                            border: `2px solid ${isSelected ? b.color : "#E8EFF8"}`,
+                            background: isSelected ? b.color : "#F8FAFD",
+                            color: isSelected ? "#fff" : "#4A5E78",
+                            fontSize: ".6rem", fontWeight: 700, cursor: "pointer",
+                            whiteSpace: "pre-line", lineHeight: 1.3, textAlign: "center",
+                            transition: "all 0.15s",
+                            boxShadow: isSelected ? `0 2px 8px ${b.color}40` : "none"
+                          }}>
+                          {b.shortLabel || b.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Selected Batch Info */}
+                  {selectedBatch && tNotifClass !== "all" && (
+                    <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 10, background: `${selectedBatch.color}08`, border: `1px solid ${selectedBatch.color}25`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <span style={{ fontSize: ".72rem", fontWeight: 800, color: selectedBatch.color }}>{selectedBatch.label}</span>
+                        {selectedBatch.medium !== "All" && <span style={{ fontSize: ".62rem", color: "#7C3AED", marginLeft: 6 }}>· {selectedBatch.medium} Medium</span>}
+                        {selectedBatch.boards?.length > 0 && <span style={{ fontSize: ".62rem", color: "#6B7F99", marginLeft: 6 }}>· {selectedBatch.boards.join("+")}</span>}
+                      </div>
+                      <span style={{ fontSize: ".75rem", fontWeight: 800, color: selectedBatch.color, background: `${selectedBatch.color}15`, padding: "3px 10px", borderRadius: 20 }}>
+                        {matchedStudents.length} students
+                      </span>
+                    </div>
+                  )}
+                  {tNotifClass === "all" && (
+                    <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 10, background: "#0C1F3608", border: "1px solid #0C1F3625", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: ".72rem", fontWeight: 800, color: "#0C1F36" }}>All Classes — Sabhi Students</span>
+                      <span style={{ fontSize: ".75rem", fontWeight: 800, color: "#0C1F36", background: "#0C1F3615", padding: "3px 10px", borderRadius: 20 }}>{tStudents.length} students</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Notification Form */}
+                <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 16, padding: 16, marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: ".75rem", fontWeight: 700, color: "#6B7F99", marginBottom: 4 }}>Type</label>
+                  <select value={notifType} onChange={e => setNotifType(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #D4DEF0", fontSize: ".85rem", marginBottom: 12, outline: "none" }}>
+                    <option value="general">📢 General</option>
+                    <option value="test">📝 Test</option>
+                    <option value="holiday">🎉 Holiday</option>
+                    <option value="fee">💰 Fee</option>
+                    <option value="result">🏆 Result</option>
+                  </select>
+                  <label style={{ display: "block", fontSize: ".75rem", fontWeight: 700, color: "#6B7F99", marginBottom: 4 }}>Message *</label>
+                  <textarea rows={3} value={notifMsg} onChange={e => setNotifMsg(e.target.value)} placeholder="Notification message likho..." style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #D4DEF0", fontSize: ".85rem", marginBottom: 4, outline: "none", resize: "none", fontFamily: "'Inter', sans-serif" }} />
+                  <p style={{ fontSize: ".65rem", color: "#9FB8CF", margin: "0 0 12px" }}>
+                    → {selectedBatch ? selectedBatch.label : "All Classes"} · {matchedStudents.length} students ko milegi
+                  </p>
+                  <button onClick={async () => {
+                    if (!notifMsg.trim()) { alert("Message likho!"); return; }
+                    try {
+                      await addDoc(collection(db, "scheduled_notifications"), {
+                        message: notifMsg.trim(),
+                        notifType: notifType,
+                        classFilter: tNotifClass,
+                        batchLabel: selectedBatch?.label || "All Classes",
+                        date: new Date().toISOString().split("T")[0],
+                        time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+                        sentBy: teacher.name,
+                        sentByRole: isDirector ? "director" : "teacher",
+                        createdAt: serverTimestamp()
+                      });
+                      setNotifMsg("");
+                      alert("✅ Notification sent!");
+                    } catch (e) { alert("Error: " + e.message); }
+                  }} style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: `linear-gradient(135deg, ${selectedBatch?.color || "#1349A8"}, #2A6FE0)`, color: "#fff", fontSize: ".88rem", fontWeight: 700, cursor: "pointer" }}>
+                    <I n="paper-plane" s={13} c="#fff" /> Send to {selectedBatch?.shortLabel?.replace("\n", " ") || "All Classes"}
+                  </button>
+                </div>
+
+                {/* Recent Notifications */}
+                <h4 style={{ fontSize: ".85rem", fontWeight: 700, margin: "0 0 10px" }}>Recent Notifications</h4>
+                {tNotifications.length === 0 ? (
+                  <p style={{ fontSize: ".78rem", color: "#6B7F99", textAlign: "center", padding: 20 }}>Koi notification nahi bheji gayi abhi</p>
+                ) : tNotifications.slice(0, 15).map(n => {
+                  const typeColors = { general: "#1349A8", test: "#7C3AED", holiday: "#059669", fee: "#D98D04", result: "#DC2626" };
+                  const tc = typeColors[n.notifType] || "#1349A8";
+                  const batchInfo = PID_BATCHES.find(b => b.id === n.classFilter);
+                  return (
+                    <div key={n.id} style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 12, padding: "10px 14px", marginBottom: 6, borderLeft: `3px solid ${batchInfo?.color || tc}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                        <p style={{ margin: 0, fontSize: ".8rem", fontWeight: 600, flex: 1, paddingRight: 6 }}>{n.message}</p>
+                        <span style={{ fontSize: ".58rem", color: "#fff", background: tc, padding: "2px 7px", borderRadius: 6, fontWeight: 700, flexShrink: 0 }}>{n.notifType || "general"}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: ".6rem", color: "#6B7F99" }}>{n.date || ""}</span>
+                        <span style={{ fontSize: ".6rem", fontWeight: 700, color: batchInfo?.color || "#1349A8", background: `${batchInfo?.color || "#1349A8"}12`, padding: "1px 7px", borderRadius: 4 }}>
+                          {n.batchLabel || (n.classFilter === "all" || !n.classFilter ? "All Classes" : `Class ${n.classFilter}`)}
+                        </span>
+                        {n.sentBy && <span style={{ fontSize: ".6rem", color: "#6B7F99" }}>· {n.sentBy}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* ═══ LEAVE APPLICATION ═══ */}
+          {teacherTab === "leave" && (
+            <div>
+              <h3 style={{ fontSize: "1rem", fontWeight: 800, margin: "8px 0 12px" }}>Leave Application</h3>
+              <div style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 16, padding: 18, marginBottom: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <div><label style={{ display: "block", fontSize: ".75rem", fontWeight: 700, color: "#6B7F99", marginBottom: 4 }}>From Date *</label><input type="date" value={leaveFrom} onChange={e => setLeaveFrom(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #D4DEF0", fontSize: ".85rem", outline: "none" }} /></div>
+                  <div><label style={{ display: "block", fontSize: ".75rem", fontWeight: 700, color: "#6B7F99", marginBottom: 4 }}>To Date</label><input type="date" value={leaveTo} onChange={e => setLeaveTo(e.target.value)} min={leaveFrom} style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #D4DEF0", fontSize: ".85rem", outline: "none" }} /></div>
+                </div>
+                <label style={{ display: "block", fontSize: ".75rem", fontWeight: 700, color: "#6B7F99", marginBottom: 4 }}>Reason *</label>
+                <textarea rows={3} placeholder="Leave ka reason likho..." value={leaveReason} onChange={e => setLeaveReason(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #D4DEF0", fontSize: ".85rem", marginBottom: 12, outline: "none", resize: "none", fontFamily: "'Inter', sans-serif" }} />
+                <p style={{ fontSize: ".7rem", color: "#6B7F99", margin: "0 0 12px" }}>{leaveFrom && leaveTo ? `${Math.ceil((new Date(leaveTo) - new Date(leaveFrom)) / (1000*60*60*24)) + 1} din ki chutti` : leaveFrom ? "1 din ki chutti" : "Dates select karo"}</p>
+                <button onClick={submitLeave} disabled={leaveSubmitting} style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #059669, #10B981)", color: "#fff", fontSize: ".88rem", fontWeight: 700, cursor: "pointer", opacity: leaveSubmitting ? 0.6 : 1 }}><I n="paper-plane" s={13} c="#fff" /> {leaveSubmitting ? "Submitting..." : "Submit Leave"}</button>
+              </div>
+              <h4 style={{ fontSize: ".85rem", fontWeight: 700, margin: "0 0 10px" }}>My Leave History</h4>
+              {myLeaves.length === 0 ? <p style={{ fontSize: ".78rem", color: "#6B7F99", textAlign: "center", padding: 20 }}>Koi leave application nahi hai</p> : myLeaves.map(lv => {
+                // Check if within 24 hours of creation
+                const createdAt = lv.createdAt?.toDate?.() || null;
+                const canEdit = createdAt && (Date.now() - createdAt.getTime()) < 24 * 60 * 60 * 1000;
+                const isEditing = editingLeave?.id === lv.id;
+                return (
+                  <div key={lv.id} style={{ background: "#fff", border: "1px solid #D4DEF0", borderRadius: 12, padding: "12px 14px", marginBottom: 8, borderLeft: "3px solid #16A34A" }}>
+                    {isEditing ? (
+                      <div>
+                        <p style={{ margin: "0 0 8px", fontSize: ".75rem", fontWeight: 700, color: "#1349A8" }}>✏️ Leave Edit Karo</p>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                          <div><label style={{ fontSize: ".7rem", color: "#6B7F99", fontWeight: 600 }}>From *</label><input type="date" value={editLeaveFrom} onChange={e => setEditLeaveFrom(e.target.value)} style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1px solid #D4DEF0", fontSize: ".8rem", outline: "none" }} /></div>
+                          <div><label style={{ fontSize: ".7rem", color: "#6B7F99", fontWeight: 600 }}>To</label><input type="date" value={editLeaveTo} onChange={e => setEditLeaveTo(e.target.value)} min={editLeaveFrom} style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1px solid #D4DEF0", fontSize: ".8rem", outline: "none" }} /></div>
+                        </div>
+                        <textarea rows={2} value={editLeaveReason} onChange={e => setEditLeaveReason(e.target.value)} style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1px solid #D4DEF0", fontSize: ".8rem", outline: "none", resize: "none", fontFamily: "inherit", marginBottom: 8 }} />
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button onClick={saveEditLeave} disabled={editLeaveSubmitting} style={{ flex: 1, padding: "8px", borderRadius: 8, border: "none", background: "#059669", color: "#fff", fontSize: ".78rem", fontWeight: 700, cursor: "pointer" }}>{editLeaveSubmitting ? "Saving..." : "Save"}</button>
+                          <button onClick={() => setEditingLeave(null)} style={{ flex: 1, padding: "8px", borderRadius: 8, border: "1px solid #D4DEF0", background: "#fff", color: "#6B7F99", fontSize: ".78rem", fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <span style={{ fontSize: ".82rem", fontWeight: 700 }}>{lv.fromDate}{lv.toDate && lv.toDate !== lv.fromDate ? ` → ${lv.toDate}` : ""}</span>
+                          <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: ".6rem", fontWeight: 700, background: "#F0FDF4", color: "#16A34A" }}>✓ Approved</span>
+                        </div>
+                        <p style={{ margin: "0 0 8px", fontSize: ".78rem", color: "#4A5E78" }}>{lv.reason}</p>
+                        {canEdit && (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => { setEditingLeave(lv); setEditLeaveFrom(lv.fromDate); setEditLeaveTo(lv.toDate || ""); setEditLeaveReason(lv.reason); }} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid #1349A8", background: "#EFF6FF", color: "#1349A8", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>✏️ Edit</button>
+                            <button onClick={() => deleteLeave(lv.id)} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid #DC2626", background: "#FEF2F2", color: "#DC2626", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>🗑 Delete</button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!student) return (
+    <div style={{ height: "100vh", background: "#0B1120", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+      <I n="exclamation-triangle" s={40} c="#D4A843" />
+      <p style={{ color: "#E8EDF5", fontWeight: 600, marginTop: 16 }}>Profile not found</p>
+      <button onClick={() => { signOut(auth); setLoginRole(null); }} style={{ marginTop: 12, padding: "10px 24px", borderRadius: 12, background: "#D4A843", color: "#0C1F36", border: "none", fontWeight: 700, cursor: "pointer" }}>Try Again</button>
     </div>
   );
 
@@ -470,6 +1234,7 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
       {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: "none" }} />
       <input ref={camInputRef} type="file" accept="image/*" capture="environment" onChange={handleImageUpload} style={{ display: "none" }} />
+      <input id="pdfInput" type="file" accept=".pdf,image/*" onChange={handleImageUpload} style={{ display: "none" }} />
 
       {/* Mobile Frame */}
       <div style={{ width: "100%", maxWidth: 460, height: "100vh", background: T.bg, color: T.text, display: "flex", flexDirection: "column", position: "relative", overflow: "hidden", boxShadow: "0 0 60px rgba(0,0,0,0.3)" }}>
@@ -500,7 +1265,7 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
         </div>
 
         {/* ═══ MAIN CONTENT AREA ═══ */}
-        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }} className="fade-in">
+        <div style={{ flex: 1, overflowY: activeTab === "ai" ? "hidden" : "auto", paddingBottom: activeTab === "ai" ? 0 : 80, display: "flex", flexDirection: "column" }} className="fade-in">
 
           {/* ═══ 1. DASHBOARD TAB ═══ */}
           {activeTab === "dashboard" && student.isEnrolled && (
@@ -514,8 +1279,9 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
                   <h1 style={{ margin: 0, fontSize: "2.8rem", fontWeight: 900, color: "#D4A843", lineHeight: 1 }}>{avgQuiz}%</h1>
                   <span style={{ padding: "4px 10px", background: "rgba(212,168,67,0.15)", borderRadius: 8, fontSize: ".72rem", fontWeight: 700, marginBottom: 6, color: "#D4A843", border: "1px solid rgba(212,168,67,0.2)" }}>Avg Score</span>
                 </div>
-                <div style={{ display: "flex", gap: 24, marginTop: 20 }}>
-                  <div><p style={{ margin: 0, fontSize: ".68rem", opacity: 0.7, textTransform: "uppercase", letterSpacing: "1px" }}>Attendance</p><p style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>{attPct}%</p></div>
+                <div style={{ display: "flex", gap: 16, marginTop: 20, flexWrap: "wrap" }}>
+                  <div><p style={{ margin: 0, fontSize: ".68rem", opacity: 0.7, textTransform: "uppercase", letterSpacing: "1px" }}>Monthly</p><p style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>{attPct}%</p><p style={{ margin: 0, fontSize: ".55rem", opacity: 0.5 }}>{monthPresentDays}/{monthWorkingDays} days</p></div>
+                  <div><p style={{ margin: 0, fontSize: ".68rem", opacity: 0.7, textTransform: "uppercase", letterSpacing: "1px" }}>Overall</p><p style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>{overallAttPct}%</p><p style={{ margin: 0, fontSize: ".55rem", opacity: 0.5 }}>{overallPresentDays}/{overallTotalDays} days</p></div>
                   <div><p style={{ margin: 0, fontSize: ".68rem", opacity: 0.7, textTransform: "uppercase", letterSpacing: "1px" }}>Tests</p><p style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>{quizHistory.length}</p></div>
                   <div><p style={{ margin: 0, fontSize: ".68rem", opacity: 0.7, textTransform: "uppercase", letterSpacing: "1px" }}>Doubts</p><p style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>{doubtHistory.length}</p></div>
                 </div>
@@ -562,33 +1328,96 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
           {/* ═══ 2. EXPLORE BATCHES TAB ═══ */}
           {activeTab === "explore" && (
             <div style={{ padding: 20 }}>
-              <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 6px" }}>Explore Batches</h2>
-              <p style={{ fontSize: ".82rem", color: T.text3, margin: "0 0 20px" }}>Enroll directly from the app.</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {courses.map(c => (
-                  <div key={c.id} style={{ background: T.card, borderRadius: 20, overflow: "hidden", border: `1px solid ${T.border}` }}>
-                    <div style={{ height: 120, background: c.posterUrl ? `url(${c.posterUrl}) center/cover` : `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, position: "relative" }}>
-                      <div style={{ position: "absolute", bottom: 10, left: 14, background: "rgba(0,0,0,0.65)", color: "#D4A843", padding: "4px 10px", borderRadius: 8, fontSize: ".72rem", backdropFilter: "blur(4px)", fontWeight: 700 }}>{c.duration || "1 Year"}</div>
-                    </div>
-                    <div style={{ padding: 16 }}>
-                      <h3 style={{ margin: "0 0 8px", fontSize: "1.1rem", fontWeight: 800 }}>{c.title}</h3>
-                      <p style={{ margin: "0 0 12px", fontSize: ".78rem", color: T.text3, lineHeight: 1.5 }}>{c.desc}</p>
-                      <div style={{ display: "flex", overflowX: "auto", gap: 8, marginBottom: 16, paddingBottom: 4 }}>
-                        {c.teachers?.map((t, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: dark ? T.card : "#F0F4FA", padding: "4px 8px", borderRadius: 8, flexShrink: 0 }}>
-                            <I n="user-tie" c={T.accent} s={11} />
-                            <span style={{ fontSize: ".68rem", fontWeight: 600 }}>{t.name} ({t.exp})</span>
+              {!exploreDetailCourse ? (
+                <>
+                  <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 6px" }}>Explore Batches</h2>
+                  <p style={{ fontSize: ".82rem", color: T.text3, margin: "0 0 20px" }}>PID Institute ke courses dekho aur enroll karo</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                    {courses.map(c => (
+                      <div key={c.id} style={{ background: T.card, borderRadius: 20, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                        <div style={{ height: 120, background: c.posterUrl ? `url(${c.posterUrl}) center/cover` : `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, position: "relative" }}>
+                          <div style={{ position: "absolute", bottom: 10, left: 14, background: "rgba(0,0,0,0.65)", color: "#D4A843", padding: "4px 10px", borderRadius: 8, fontSize: ".72rem", backdropFilter: "blur(4px)", fontWeight: 700 }}>{c.duration || "1 Year"}</div>
+                        </div>
+                        <div style={{ padding: 16 }}>
+                          <h3 style={{ margin: "0 0 8px", fontSize: "1.1rem", fontWeight: 800 }}>{c.title}</h3>
+                          <p style={{ margin: "0 0 12px", fontSize: ".78rem", color: T.text3, lineHeight: 1.5 }}>{(c.desc || "").slice(0, 100)}{(c.desc || "").length > 100 ? "..." : ""}</p>
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+                            {(c.subjects || []).map((sub, i) => <span key={i} style={{ padding: "3px 8px", borderRadius: 6, background: dark ? T.card : "#F0F4FA", border: `1px solid ${T.border}`, fontSize: ".65rem", fontWeight: 600, color: T.text2 }}>{sub}</span>)}
                           </div>
-                        ))}
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button onClick={() => setEnrollContact(enrollContact === c.id ? null : c.id)} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: "none", background: `linear-gradient(135deg, ${T.success}, #10B981)`, color: "#fff", fontSize: ".8rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><I n="user-plus" s={13} c="#fff" /> Enroll Now</button>
+                            <button onClick={() => setExploreDetailCourse(c)} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: `1px solid ${T.accent}`, background: "transparent", color: T.accent, fontSize: ".8rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><I n="info-circle" s={13} /> Explore</button>
+                          </div>
+                          {enrollContact === c.id && (
+                            <div style={{ marginTop: 12, background: dark ? "#0D2118" : "#ECFDF5", border: `1px solid ${dark ? '#1B4332' : '#86EFAC'}`, borderRadius: 14, padding: 16 }}>
+                              <p style={{ margin: "0 0 10px", fontSize: ".82rem", fontWeight: 700, color: T.success }}><I n="phone-alt" s={12} c={T.success} /> Admission ke liye contact karo</p>
+                              <p style={{ margin: "0 0 12px", fontSize: ".88rem", fontWeight: 800, color: T.text }}>8319002877 / 7470412110</p>
+                              <div style={{ display: "flex", gap: 8 }}>
+                                <a href="tel:8319002877" style={{ flex: 1, padding: "10px 0", borderRadius: 10, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", fontSize: ".8rem", fontWeight: 700, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><I n="phone" s={13} c="#fff" /> Call</a>
+                                <a href={`https://wa.me/918319002877?text=${encodeURIComponent("Hi, I want to enroll in *" + c.title + "* at PID Dongargaon. Please share details.")}`} target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: "10px 0", borderRadius: 10, background: `linear-gradient(135deg, ${T.success}, #10B981)`, color: "#fff", fontSize: ".8rem", fontWeight: 700, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><I n="comment-dots" s={13} c="#fff" /> WhatsApp</a>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div><p style={{ margin: 0, fontSize: ".68rem", color: T.text3 }}>Batch Fee</p><p style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800, color: T.success }}>₹{c.price || "Contact Us"}</p></div>
-                        <button onClick={() => setShowUpiModal(true)} style={{ background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", border: "none", padding: "10px 22px", borderRadius: 12, fontWeight: 700, cursor: "pointer", fontSize: ".85rem" }}>Enroll & Pay</button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <button onClick={() => setExploreDetailCourse(null)} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 14px", marginBottom: 16, display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer", color: T.text3, fontSize: ".8rem" }}><I n="arrow-left" s={12} /> Back to Courses</button>
+                  <div style={{ height: 160, borderRadius: 20, overflow: "hidden", marginBottom: 16, background: exploreDetailCourse.posterUrl ? `url(${exploreDetailCourse.posterUrl}) center/cover` : `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, display: "flex", alignItems: "flex-end", padding: 20 }}>
+                    <div><h2 style={{ margin: "0 0 4px", fontSize: "1.3rem", fontWeight: 900, color: "#fff" }}>{exploreDetailCourse.title}</h2>
+                    {exploreDetailCourse.tag && <span style={{ padding: "3px 10px", borderRadius: 8, fontSize: ".65rem", fontWeight: 700, background: "rgba(255,255,255,.2)", color: "#fff" }}>{exploreDetailCourse.tag}</span>}</div>
+                  </div>
+                  {exploreDetailCourse.desc && <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 14 }}><p style={{ margin: 0, fontSize: ".82rem", color: T.text2, lineHeight: 1.7 }}>{exploreDetailCourse.desc}</p></div>}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                    {[["Duration", exploreDetailCourse.duration, "clock", T.accent], ["Timing", exploreDetailCourse.timing, "calendar-alt", T.purple], ["Batch Size", exploreDetailCourse.batchSize ? exploreDetailCourse.batchSize + " students" : null, "users", T.success], ["Start Date", exploreDetailCourse.startDate, "calendar-check", T.orange]].filter(([,v]) => v).map(([l, v, ic, col]) => (
+                      <div key={l} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 34, height: 34, borderRadius: 10, background: col + "15", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><I n={ic} s={14} c={col} /></div>
+                        <div><p style={{ margin: 0, fontSize: ".62rem", color: T.text3 }}>{l}</p><p style={{ margin: "2px 0 0", fontSize: ".85rem", fontWeight: 700 }}>{v}</p></div>
+                      </div>
+                    ))}
+                  </div>
+                  {(exploreDetailCourse.subjects || []).length > 0 && <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 10px", fontSize: ".85rem", fontWeight: 800 }}><I n="book" s={12} c={T.accent} /> Subjects</h4>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{(exploreDetailCourse.subjects || []).map((sub, i) => <span key={i} style={{ padding: "6px 14px", borderRadius: 10, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", fontSize: ".75rem", fontWeight: 700 }}>{sub}</span>)}</div>
+                  </div>}
+                  {(exploreDetailCourse.teachers || []).length > 0 && <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 12px", fontSize: ".85rem", fontWeight: 800 }}><I n="chalkboard-teacher" s={12} c={T.accent} /> Our Faculty</h4>
+                    {exploreDetailCourse.teachers.map((t, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, padding: "12px 14px", background: dark ? "#162544" : "#F5F8FF", borderRadius: 14, border: `1px solid ${T.border}` }}>
+                        <div style={{ width: 48, height: 48, borderRadius: 14, overflow: "hidden", flexShrink: 0, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          {t.photo ? <img src={t.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <I n="user-tie" s={20} c="#fff" />}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <h4 style={{ margin: 0, fontSize: ".88rem", fontWeight: 800 }}>{t.name}</h4>
+                          <p style={{ margin: "2px 0 0", fontSize: ".7rem", color: T.text3 }}>{t.subject || ""}{t.exp ? ` · ${t.exp}` : ""}{t.qualification ? ` · ${t.qualification}` : ""}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>}
+                  {(exploreDetailCourse.facilities || exploreDetailCourse.features || []).length > 0 && <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+                    <h4 style={{ margin: "0 0 10px", fontSize: ".85rem", fontWeight: 800 }}><I n="check-circle" s={12} c={T.success} /> Facilities</h4>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{(exploreDetailCourse.facilities || exploreDetailCourse.features || []).map((f, i) => <span key={i} style={{ padding: "6px 12px", borderRadius: 10, background: dark ? "#0D2118" : "#ECFDF5", border: `1px solid ${dark ? '#1B4332' : '#86EFAC'}`, fontSize: ".75rem", fontWeight: 600, color: T.success, display: "flex", alignItems: "center", gap: 6 }}><I n="check" s={10} c={T.success} /> {f}</span>)}</div>
+                  </div>}
+                  <div style={{ background: `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, borderRadius: 16, padding: 20, marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div><p style={{ margin: 0, fontSize: ".72rem", color: "rgba(255,255,255,.6)" }}>Course Fee</p><p style={{ margin: "4px 0 0", fontSize: "1.4rem", fontWeight: 900, color: "#D4A843" }}>{exploreDetailCourse.price ? `₹${Number(exploreDetailCourse.price).toLocaleString("en-IN")}` : "Contact for fee"}</p></div>
+                    <span style={{ fontSize: ".72rem", color: "rgba(255,255,255,.6)" }}>{exploreDetailCourse.duration || "Full Course"}</span>
+                  </div>
+                  <button onClick={() => setEnrollContact(enrollContact === exploreDetailCourse.id ? null : exploreDetailCourse.id)} style={{ width: "100%", padding: "14px", borderRadius: 14, border: "none", background: `linear-gradient(135deg, ${T.success}, #10B981)`, color: "#fff", fontSize: ".9rem", fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 10 }}><I n="user-plus" s={14} c="#fff" /> Enroll Now</button>
+                  {enrollContact === exploreDetailCourse.id && (
+                    <div style={{ background: dark ? "#0D2118" : "#ECFDF5", border: `1px solid ${dark ? '#1B4332' : '#86EFAC'}`, borderRadius: 14, padding: 16 }}>
+                      <p style={{ margin: "0 0 10px", fontSize: ".82rem", fontWeight: 700, color: T.success }}><I n="phone-alt" s={12} c={T.success} /> Admission ke liye contact karo</p>
+                      <p style={{ margin: "0 0 12px", fontSize: ".88rem", fontWeight: 800, color: T.text }}>8319002877 / 7470412110</p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <a href="tel:8319002877" style={{ flex: 1, padding: "10px 0", borderRadius: 10, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", fontSize: ".8rem", fontWeight: 700, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><I n="phone" s={13} c="#fff" /> Call</a>
+                        <a href={`https://wa.me/918319002877?text=${encodeURIComponent("Hi, I want to enroll in *" + exploreDetailCourse.title + "* at PID Dongargaon. Please share details.")}`} target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: "10px 0", borderRadius: 10, background: `linear-gradient(135deg, ${T.success}, #10B981)`, color: "#fff", fontSize: ".8rem", fontWeight: 700, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><I n="comment-dots" s={13} c="#fff" /> WhatsApp</a>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -598,7 +1427,20 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
               {!selectedCourse ? (
                 <>
                   <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 16px" }}>My Batches</h2>
-                  {courses.map(c => (
+                  {courses.filter(c => {
+                    if (!student?.isEnrolled) return false;
+                    const cls = (student.class || student.presentClass || "").toLowerCase().trim();
+                    const enrolledId = (student.courseId || student.batchId || "").toLowerCase().trim();
+                    const cId = (c.id || "").toLowerCase();
+                    const cClassId = (c.classId || "").toLowerCase();
+                    const cTitle = (c.title || "").toLowerCase();
+                    if (enrolledId && (cId === enrolledId || cClassId === enrolledId)) return true;
+                    if (cls && cClassId && cClassId === cls) return true;
+                    const clsNum = cls.replace(/[^0-9]/g, "");
+                    if (clsNum && cTitle.includes("class " + clsNum)) return true;
+                    if (clsNum && cClassId.includes(clsNum)) return true;
+                    return false;
+                  }).map(c => (
                     <div key={c.id} onClick={() => setSelectedCourse(c)} style={{ background: T.card, borderRadius: 18, overflow: "hidden", border: `1px solid ${T.border}`, cursor: "pointer", marginBottom: 16 }}>
                       <div style={{ height: 90, background: `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, display: "flex", alignItems: "center", padding: 20, position: "relative" }}>
                         <div style={{ position: "absolute", right: 15, top: 15, width: 40, height: 40, borderRadius: "50%", background: "rgba(212,168,67,0.1)" }} />
@@ -648,7 +1490,7 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
 
           {/* ═══ 4. AI PORTAL TAB ═══ */}
           {activeTab === "ai" && (
-            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
               {/* Sub-tab bar */}
               <div style={{ display: "flex", overflowX: "auto", gap: 6, padding: "16px 16px 8px", background: T.bg }}>
                 {[
@@ -672,7 +1514,7 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
 
               {/* ══ 4a. DOUBT SOLVER — Portal Style ══ */}
               {aiSubTab === "doubt" && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", background: T.bg }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", background: T.bg, minHeight: 0, overflow: "hidden" }}>
                   {/* Controls Row */}
                   <div style={{ display: "flex", gap: 6, padding: "8px 16px", flexWrap: "wrap", alignItems: "center" }}>
                     <select style={{ flex: "1 1 100px", border: `1.5px solid ${T.border}`, borderRadius: 10, padding: "6px 10px", fontSize: ".76rem", background: T.card, color: T.text, outline: "none", fontWeight: 600 }} value={doubtSubject} onChange={e => setDoubtSubject(e.target.value)}>
@@ -709,17 +1551,20 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
                       </div>
                       {doubtHistory.length === 0 ? <p style={{ fontSize: ".78rem", color: T.text3, textAlign: "center", padding: 12 }}>Koi history nahi hai</p> : (
                         doubtHistory.map(ses => (
-                          <div key={ses.id} onClick={() => loadSession(ses)} style={{
+                          <div key={ses.id} style={{
                             padding: "8px 12px", borderRadius: 10,
                             border: `1px solid ${activeSessionId === ses.id ? T.success : T.border}`,
                             background: activeSessionId === ses.id ? (dark ? "#0D2118" : "#ECFDF5") : T.card,
-                            marginBottom: 6, cursor: "pointer", fontSize: ".78rem"
+                            marginBottom: 6, fontSize: ".78rem", display: "flex", alignItems: "center", gap: 8
                           }}>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                              <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: ".65rem", fontWeight: 700, background: dark ? "#0D2118" : "#ECFDF5", color: T.success }}>{ses.subject || "General"}</span>
-                              <span style={{ fontSize: ".62rem", color: T.text3 }}>{ses.createdAt?.toDate?.()?.toLocaleDateString?.("en-IN", { day: "numeric", month: "short" }) || ""}</span>
+                            <div style={{ flex: 1, cursor: "pointer", minWidth: 0 }} onClick={() => loadSession(ses)}>
+                              <p style={{ margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: ".78rem", fontWeight: 700, color: T.text }}>{ses.messages?.[0]?.text || ses.lastMessage || "Doubt"}</p>
+                              <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center" }}>
+                                <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: ".6rem", fontWeight: 700, background: dark ? "#0D2118" : "#ECFDF5", color: T.success }}>{ses.subject || "General"}</span>
+                                <span style={{ fontSize: ".58rem", color: T.text3 }}>{ses.createdAt?.toDate?.()?.toLocaleDateString?.("en-IN", { day: "numeric", month: "short" }) || ""}</span>
+                              </div>
                             </div>
-                            <p style={{ margin: "4px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: ".76rem", color: T.text2 }}>{ses.messages?.[0]?.text || "..."}</p>
+                            <button onClick={(e) => { e.stopPropagation(); if (confirm("Delete this chat?")) deleteDoc(doc(db, "doubt_history", ses.id)).catch(console.error); }} style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${T.danger}30`, background: `${T.danger}10`, color: T.danger, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><I n="trash" s={10} /></button>
                           </div>
                         ))
                       )}
@@ -809,7 +1654,7 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
                   )}
 
                   {/* Input Bar — ChatGPT Style */}
-                  <div style={{ padding: "10px 16px 14px", background: T.bg }}>
+                  <div style={{ padding: "10px 16px 14px", background: T.bg, flexShrink: 0, borderTop: `1px solid ${T.border}`, marginBottom: 70 }}>
                     <div style={{ display: "flex", gap: 8, alignItems: "flex-end", background: T.inputBg, border: `1.5px solid ${T.border}`, borderRadius: 16, padding: "6px 8px 6px 4px" }}>
                       {/* Attach button */}
                       <div style={{ position: "relative" }}>
@@ -824,6 +1669,9 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
                             <button onClick={() => { fileInputRef.current?.click(); }} style={{ width: "100%", padding: "10px 14px", border: "none", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, borderRadius: 8, fontSize: ".82rem", color: T.text }}>
                               <I n="image" c={T.accent} s={14} /> Gallery
                             </button>
+                            <button onClick={() => { document.getElementById("pdfInput")?.click(); }} style={{ width: "100%", padding: "10px 14px", border: "none", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, borderRadius: 8, fontSize: ".82rem", color: T.text }}>
+                              <I n="file-pdf" c={T.danger} s={14} /> PDF File
+                            </button>
                           </div>
                         )}
                       </div>
@@ -834,13 +1682,13 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
                         value={dInput}
                         onChange={handleTextareaInput}
                         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askDoubt(); } }}
-                        disabled={dLoading || isTyping}
+                        disabled={dLoading}
                         rows={1}
                       />
-                      <button onClick={askDoubt} disabled={dLoading || isTyping || (!dInput.trim() && !dImgB64)} style={{
+                      <button onClick={askDoubt} disabled={dLoading || (!dInput.trim() && !dImgB64)} style={{
                         width: 36, height: 36, borderRadius: 10, border: "none",
-                        background: (dLoading || isTyping || (!dInput.trim() && !dImgB64)) ? T.border : `linear-gradient(135deg, ${T.success}, #10B981)`,
-                        color: "#fff", cursor: (dLoading || isTyping || (!dInput.trim() && !dImgB64)) ? "default" : "pointer",
+                        background: (dLoading || (!dInput.trim() && !dImgB64)) ? T.border : `linear-gradient(135deg, ${T.success}, #10B981)`,
+                        color: "#fff", cursor: (dLoading || (!dInput.trim() && !dImgB64)) ? "default" : "pointer",
                         display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0
                       }}>
                         <I n={dLoading ? "spinner" : "arrow-up"} cls={dLoading ? "fa-spin" : ""} s={14} />
@@ -1068,33 +1916,30 @@ ${hist ? `Context:\n${hist}\n\n` : ""}Student: ${msgText || "Analyze this image 
 
               {/* ══ 4c. DESMOS GRAPH INTEGRATION ══ */}
               {aiSubTab === "graph" && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 16 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", flexShrink: 0 }}>
                     <div style={{ width: 34, height: 34, borderRadius: 10, background: dark ? "#2D1010" : "#FEF2F2", display: "flex", alignItems: "center", justifyContent: "center" }}>
                       <I n="chart-line" s={16} c={T.danger} />
                     </div>
-                    <div>
+                    <div style={{ flex: 1 }}>
                       <h3 style={{ fontSize: "1rem", fontWeight: 800, margin: 0 }}>Desmos Graph Calculator</h3>
                       <p style={{ fontSize: ".7rem", color: T.text3, margin: 0 }}>Full-featured graphing tool</p>
                     </div>
                   </div>
-                  <div style={{ flex: 1, borderRadius: 16, overflow: "hidden", border: `2px solid ${T.border}`, minHeight: 400, background: "#fff" }}>
+                  <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
                     <iframe
                       src="https://www.desmos.com/calculator"
-                      style={{ width: "100%", height: "100%", border: "none", minHeight: 500 }}
+                      style={{ width: "100%", height: "100%", border: "none", display: "block" }}
                       title="Desmos Graphing Calculator"
                       allow="clipboard-write"
                     />
                   </div>
-                  <p style={{ fontSize: ".7rem", color: T.text3, textAlign: "center", marginTop: 8 }}>
-                    Powered by Desmos — Type equations, plot graphs, explore math!
-                  </p>
                 </div>
               )}
 
               {/* ══ 4d. PERSONALIZED PROMPT ══ */}
               {aiSubTab === "prompt" && (
-                <div style={{ padding: 16 }}>
+                <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
                   <div style={{ background: `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, borderRadius: 18, padding: 20, color: "#fff", marginBottom: 16 }}>
                     <h2 style={{ margin: "0 0 8px", fontSize: "1.1rem", fontWeight: 800 }}><I n="wand-magic-sparkles" s={16} /> Magic Prompt Engine</h2>
                     <p style={{ margin: 0, fontSize: ".82rem", opacity: 0.85 }}>Based on your daily app usage, we generated a personalized context block. Paste this into any AI to get custom tutoring.</p>
@@ -1121,7 +1966,7 @@ Instructions:
 Now, teach me: [TYPE YOUR TOPIC HERE]`}
                     </div>
                     <button
-                      onClick={() => navigator.clipboard.writeText(`Act as an expert Indian private tutor. Student Profile: Name: ${student?.studentName}, Class: ${student?.class || student?.presentClass}, Board: ${student?.board || "CG Board"}, Avg Test Score: ${avgQuiz}%, Weak Areas: ${weakSubjects.join(", ")}. Language: ${langLabel}. Now teach me: `)}
+                      onClick={() => navigator.clipboard.writeText(`Act as an expert Indian private tutor.\nStudent Profile:\n- Name: ${student?.studentName || "Student"}\n- Class: ${student?.class || student?.presentClass || "N/A"}\n- Board: ${student?.board || "CG Board"}\n- Current Attendance: ${attPct}%\n- Avg Test Score: ${avgQuiz}%\n- Areas of Struggle: ${weakSubjects.length ? weakSubjects.join(", ") : "Advanced Problem Solving"}\n- Preferred Language: ${langLabel}\n\nInstructions:\n1. Explain concepts simply, with real-world Indian examples.\n2. If teaching a struggle area, use the Feynman technique.\n3. Keep answers concise. Step-by-step for math/science.\n4. Respond in ${langLabel}.\n\nNow, teach me: `)}
                       style={{ marginTop: 16, width: "100%", padding: "12px", background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, border: "none", borderRadius: 12, color: "#fff", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: ".88rem" }}
                     >
                       <I n="copy" s={14} /> Copy Base Prompt
@@ -1175,6 +2020,121 @@ Now, teach me: [TYPE YOUR TOPIC HERE]`}
             </div>
           )}
 
+          {/* ═══ 7. NOTIFICATIONS TAB ═══ */}
+          {activeTab === "notifications" && (
+            <div style={{ padding: 20 }}>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 6px" }}>Notifications</h2>
+              <p style={{ fontSize: ".82rem", color: T.text3, margin: "0 0 20px" }}>Aapki class ki saari notifications</p>
+              {notifications.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 50, color: T.text3 }}>
+                  <I n="bell-slash" s={40} style={{ marginBottom: 12, opacity: 0.4 }} />
+                  <p style={{ fontSize: ".85rem" }}>Koi notification nahi hai abhi</p>
+                </div>
+              ) : (
+                notifications.map(n => {
+                  const typeConfig = { fee: { icon: "rupee-sign", color: T.orange, bg: dark ? "#1C1A0E" : "#FFFBEB" }, test: { icon: "laptop-code", color: T.accent, bg: dark ? "#0F1E38" : "#EFF6FF" }, holiday: { icon: "calendar-alt", color: T.purple, bg: dark ? "#1A0F2E" : "#FAF5FF" }, result: { icon: "chart-bar", color: T.success, bg: dark ? "#0D2118" : "#ECFDF5" }, general: { icon: "bell", color: T.gold, bg: dark ? "#1C1A0E" : "#FFFBEB" } };
+                  const tc = typeConfig[n.notifType] || typeConfig.general;
+                  return (
+                    <div key={n.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 10, borderLeft: `3px solid ${tc.color}` }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                        <div style={{ width: 38, height: 38, borderRadius: 10, background: tc.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
+                          <I n={tc.icon} s={16} c={tc.color} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          {n.title && <h4 style={{ margin: "0 0 4px", fontSize: ".88rem", fontWeight: 800 }}>{n.title}</h4>}
+                          <p style={{ margin: 0, fontSize: ".8rem", color: T.text2, lineHeight: 1.5 }}>{n.message}</p>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: ".6rem", fontWeight: 700, background: tc.bg, color: tc.color, textTransform: "capitalize" }}>{n.notifType || "General"}</span>
+                            <span style={{ fontSize: ".6rem", color: T.text3 }}>{n.date || ""}</span>
+                            {n.time && <span style={{ fontSize: ".6rem", color: T.text3 }}>{n.time}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {/* ═══ 8. STUDENT PROFILE TAB ═══ */}
+          {activeTab === "profile" && (
+            <div style={{ padding: 20 }}>
+              {/* Profile Header */}
+              <div style={{ background: `linear-gradient(135deg, ${T.gradStart}, ${T.gradEnd})`, borderRadius: 22, padding: 28, textAlign: "center", marginBottom: 16, position: "relative", overflow: "hidden" }}>
+                <div style={{ position: "absolute", right: -20, top: -20, width: 100, height: 100, borderRadius: "50%", background: "rgba(255,255,255,.06)" }} />
+                <div style={{ width: 80, height: 80, borderRadius: 22, background: "rgba(255,255,255,.15)", border: "3px solid rgba(255,255,255,.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px", overflow: "hidden" }}>
+                  {student.photo && student.photo.startsWith("http") ? <img src={student.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: "2rem", fontWeight: 800 }}>{(student.studentName || "S").charAt(0)}</span>}
+                </div>
+                <h3 style={{ margin: "0 0 4px", fontSize: "1.2rem", fontWeight: 900, color: "#fff" }}>{student.studentName}</h3>
+                <p style={{ margin: 0, fontSize: ".82rem", color: "rgba(255,255,255,.7)" }}>Class {student.class || student.presentClass || "—"} · {student.board || "CG Board"}</p>
+                {student.status && <span style={{ display: "inline-block", marginTop: 8, padding: "3px 12px", borderRadius: 20, fontSize: ".65rem", fontWeight: 700, background: student.status === "active" ? "rgba(16,185,129,.2)" : "rgba(239,68,68,.2)", color: student.status === "active" ? "#10B981" : "#EF4444" }}>{student.status === "active" ? "● Active" : "● Inactive"}</span>}
+              </div>
+
+              {/* Performance Summary */}
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 18, padding: 16, marginBottom: 16 }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: ".82rem", fontWeight: 800, color: T.accent }}><I n="chart-bar" s={12} c={T.accent} /> Performance</h4>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  {[["Attendance", attPct + "%", T.success], ["Quiz Avg", avgQuiz + "%", T.purple], ["Tests", String(quizHistory.length), T.orange]].map(([l, v, c]) => (
+                    <div key={l} style={{ textAlign: "center", padding: "10px 0", background: dark ? "#162544" : "#F5F8FF", borderRadius: 12 }}>
+                      <div style={{ fontSize: "1.1rem", fontWeight: 800, color: c }}>{v}</div>
+                      <div style={{ fontSize: ".6rem", color: T.text3, marginTop: 2 }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Personal Info */}
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 18, overflow: "hidden", marginBottom: 16 }}>
+                <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, background: dark ? "#162544" : "#F5F8FF" }}><h4 style={{ margin: 0, fontSize: ".82rem", fontWeight: 800, color: T.accent }}><I n="user" s={12} c={T.accent} /> Personal Info</h4></div>
+                {[["Name", student.studentName], ["Class", student.class || student.presentClass], ["Board", student.board], ["Medium", student.medium], ["Date of Birth", student.dob], ["Gender", student.gender], ["Category", student.category], ["Aadhar No.", student.aadharNumber || student.aadhar], ["Blood Group", student.bloodGroup]].filter(([, v]) => v).map(([l, v], i, a) => (
+                  <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "12px 16px", borderBottom: i < a.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                    <span style={{ fontSize: ".78rem", color: T.text3, fontWeight: 600 }}>{l}</span>
+                    <span style={{ fontSize: ".78rem", fontWeight: 700, textAlign: "right", maxWidth: "55%", wordBreak: "break-word" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Contact Details */}
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 18, overflow: "hidden", marginBottom: 16 }}>
+                <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, background: dark ? "#162544" : "#F5F8FF" }}><h4 style={{ margin: 0, fontSize: ".82rem", fontWeight: 800, color: T.success }}><I n="phone" s={12} c={T.success} /> Contact Details</h4></div>
+                {[["Email", student.studentEmail], ["Phone", student.studentPhone || student.phone], ["Father's Name", student.fatherName], ["Father's Phone", student.fatherPhone], ["Mother's Name", student.motherName], ["Mother's Phone", student.motherPhone], ["Address", student.address]].filter(([, v]) => v).map(([l, v], i, a) => (
+                  <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "12px 16px", borderBottom: i < a.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                    <span style={{ fontSize: ".78rem", color: T.text3, fontWeight: 600 }}>{l}</span>
+                    <span style={{ fontSize: ".78rem", fontWeight: 700, textAlign: "right", maxWidth: "55%", wordBreak: "break-word" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Academic Info */}
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 18, overflow: "hidden", marginBottom: 16 }}>
+                <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, background: dark ? "#162544" : "#F5F8FF" }}><h4 style={{ margin: 0, fontSize: ".82rem", fontWeight: 800, color: T.gold }}><I n="graduation-cap" s={12} c={T.gold} /> Academic Info</h4></div>
+                {[["Admission Date", student.admissionDate], ["Enrollment No.", student.enrollmentNumber || student.enrollmentNo], ["Roll Number", student.rollNumber || student.rollNo], ["RFID Code", student.rfidCode], ["Batch/Course", student.course || student.batch], ["Previous School", student.previousSchool]].filter(([, v]) => v).map(([l, v], i, a) => (
+                  <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "12px 16px", borderBottom: i < a.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                    <span style={{ fontSize: ".78rem", color: T.text3, fontWeight: 600 }}>{l}</span>
+                    <span style={{ fontSize: ".78rem", fontWeight: 700, textAlign: "right", maxWidth: "55%", wordBreak: "break-word" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Fee Status */}
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 18, padding: 16, marginBottom: 16 }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: ".82rem", fontWeight: 800, color: T.orange }}><I n="rupee-sign" s={12} c={T.orange} /> Fee Status</h4>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {[["Total Fee", student.totalFee ? `₹${Number(student.totalFee).toLocaleString("en-IN")}` : "—", T.accent], ["Fee Paid", student.enrollmentFeePaid ? `₹${Number(student.enrollmentFeePaid).toLocaleString("en-IN")}` : "—", T.success], ["Due Amount", (Number(student.totalFee || 0) - Number(student.enrollmentFeePaid || 0)) > 0 ? `₹${(Number(student.totalFee || 0) - Number(student.enrollmentFeePaid || 0)).toLocaleString("en-IN")}` : "Paid ✓", (Number(student.totalFee || 0) - Number(student.enrollmentFeePaid || 0)) > 0 ? T.danger : T.success], ["Payment Mode", student.paymentMode || "—", T.text2]].map(([l, v, c]) => (
+                    <div key={l} style={{ textAlign: "center", padding: "10px 0", background: dark ? "#162544" : "#F5F8FF", borderRadius: 12 }}>
+                      <div style={{ fontSize: ".95rem", fontWeight: 800, color: c }}>{v}</div>
+                      <div style={{ fontSize: ".6rem", color: T.text3, marginTop: 2 }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Logout */}
+              <button onClick={() => signOut(auth)} style={{ width: "100%", padding: "14px", borderRadius: 14, border: `1px solid ${T.danger}`, background: dark ? "rgba(239,68,68,.08)" : "rgba(220,38,38,.06)", color: T.danger, fontSize: ".88rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><I n="sign-out-alt" s={14} /> Logout</button>
+            </div>
+          )}
+
         </div>
 
         {/* ═══ FLOATING BOTTOM NAVIGATION ═══ */}
@@ -1182,9 +2142,9 @@ Now, teach me: [TYPE YOUR TOPIC HERE]`}
           {[
             { id: "dashboard", i: "chart-simple", l: "Home" },
             { id: "myBatches", i: "chalkboard-user", l: "Batches" },
-            { id: "explore", i: "compass", l: "Explore" },
-            { id: "library", i: "book", l: "Books" },
-            { id: "ai", i: "robot", l: "AI Portal" }
+            { id: "ai", i: "robot", l: "AI" },
+            { id: "notifications", i: "bell", l: "Alerts" },
+            { id: "profile", i: "user-circle", l: "Profile" }
           ].map(tab => {
             const isActive = activeTab === tab.id;
             return (

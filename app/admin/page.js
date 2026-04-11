@@ -465,7 +465,8 @@ export default function AdminPanel() {
   const [holidayForm, setHolidayForm] = useState({});
   const [showHolidayForm, setShowHolidayForm] = useState(false);
   const [notifications, setNotifications] = useState([]);
-  const [leaveApplications, setLeaveApplications] = useState([]); // parent leave requests
+  const [leaveApplications, setLeaveApplications] = useState([]); // parent/student leave requests
+  const [teacherLeaves, setTeacherLeaves] = useState([]); // teacher leave requests
   const [notifForm, setNotifForm] = useState({});
   const [showNotifForm, setShowNotifForm] = useState(false);
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
@@ -654,11 +655,16 @@ export default function AdminPanel() {
       arr.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
       setOtList(arr);
     }));
-    // ═══ LEAVE APPLICATIONS LISTENER ═══
+    // ═══ LEAVE APPLICATIONS LISTENER — student/parent ═══
     unsubs.push(onSnapshot(collection(db, "leave_applications"), s => {
       const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
-      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-      setLeaveApplications(arr);
+      // Teacher leaves alag, student/parent leaves alag
+      const teacherLv = arr.filter(lv => lv.teacherId);
+      const studentLv = arr.filter(lv => !lv.teacherId);
+      teacherLv.sort((a, b) => (b.createdAt?.toDate?.() || 0) - (a.createdAt?.toDate?.() || 0));
+      studentLv.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      setTeacherLeaves(teacherLv);
+      setLeaveApplications(studentLv);
     }));
     return () => unsubs.forEach(u => u());
   }, [isAdmin]);
@@ -1911,6 +1917,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     { id: "ai_doubts", icon: "fa-brain", label: "AI Doubt Insights" },
     { id: "fees", icon: "fa-rupee-sign", label: "Fee Management" },
     { id: "settings", icon: "fa-cog", label: "Website Settings" },
+    { id: "leave_alerts", icon: "fa-calendar-times", label: "Leave Alerts" },
   ];
 
   const pendingReviews = reviews.filter(r => !r.approved);
@@ -1937,6 +1944,13 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             {t.id === "students" && students.length > 0 && <span style={{ marginLeft: "auto", background: "#059669", color: "#fff", fontSize: ".6rem", padding: "2px 6px", borderRadius: 99 }}>{students.length}</span>}
             {t.id === "materials" && materials.length > 0 && <span style={{ marginLeft: "auto", background: "#0891B2", color: "#fff", fontSize: ".6rem", padding: "2px 6px", borderRadius: 99 }}>{materials.length}</span>}
             {t.id === "attendance" && attendance.length > 0 && <span style={{ marginLeft: "auto", background: "#E11D48", color: "#fff", fontSize: ".6rem", padding: "2px 6px", borderRadius: 99 }}>{attendance.length}</span>}
+            {t.id === "leave_alerts" && (() => {
+              const today = new Date().toISOString().split("T")[0];
+              const todayTeacherLeaves = teacherLeaves.filter(lv => lv.fromDate <= today && (lv.toDate || lv.fromDate) >= today).length;
+              const todayStudentLeaves = leaveApplications.filter(lv => lv.date === today).length;
+              const total = todayTeacherLeaves + todayStudentLeaves;
+              return total > 0 ? <span style={{ marginLeft: "auto", background: "#D97706", color: "#fff", fontSize: ".6rem", padding: "2px 6px", borderRadius: 99 }}>{total}</span> : null;
+            })()}
           </button>
         ))}
         <div style={{ padding: "16px 20px", marginTop: 16, borderTop: "1px solid rgba(255,255,255,.1)" }}>
@@ -2422,6 +2436,216 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
         </>}
 
         {/* ═══════════ SETTINGS TAB ═══════════ */}
+        {/* ═══════════ LEAVE ALERTS TAB ═══════════ */}
+        {tab === "leave_alerts" && (() => {
+          const today = new Date().toISOString().split("T")[0];
+
+          // Teachers on leave today
+          const teachersOnLeaveToday = teacherLeaves.filter(lv =>
+            lv.fromDate <= today && (lv.toDate || lv.fromDate) >= today
+          );
+
+          // Students on leave today
+          const studentsOnLeaveToday = leaveApplications.filter(lv => lv.date === today);
+
+          // All upcoming teacher leaves (future)
+          const upcomingTeacherLeaves = teacherLeaves.filter(lv => lv.fromDate > today).slice(0, 10);
+
+          // Recent student leaves (last 7 days)
+          const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+          const recentStudentLeaves = leaveApplications.filter(lv => lv.date >= sevenDaysAgo.toISOString().split("T")[0]).slice(0, 20);
+
+          return (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}>
+                  <i className="fas fa-calendar-times" style={{ marginRight: 10, color: "#D97706" }} />
+                  Leave Alerts
+                </h2>
+                <span style={{ fontSize: ".82rem", color: "#6B7F99", background: "#F0F4FA", padding: "6px 14px", borderRadius: 8, fontWeight: 600 }}>
+                  Today: {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "long" })}
+                </span>
+              </div>
+
+              {/* ─── TODAY SUMMARY CARDS ─── */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 24 }}>
+                <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #FDE68A", padding: 18, borderLeft: "4px solid #D97706" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: "#FFFBEB", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <i className="fas fa-chalkboard-teacher" style={{ color: "#D97706", fontSize: "1rem" }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#D97706" }}>{teachersOnLeaveToday.length}</div>
+                      <div style={{ fontSize: ".72rem", color: "#92400E", fontWeight: 600 }}>Teachers on Leave Today</div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #FCA5A5", padding: 18, borderLeft: "4px solid #DC2626" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: "#FEF2F2", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <i className="fas fa-user-graduate" style={{ color: "#DC2626", fontSize: "1rem" }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#DC2626" }}>{studentsOnLeaveToday.length}</div>
+                      <div style={{ fontSize: ".72rem", color: "#991B1B", fontWeight: 600 }}>Students on Leave Today</div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #86EFAC", padding: 18, borderLeft: "4px solid #16A34A" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: "#F0FDF4", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <i className="fas fa-calendar-check" style={{ color: "#16A34A", fontSize: "1rem" }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#16A34A" }}>{upcomingTeacherLeaves.length}</div>
+                      <div style={{ fontSize: ".72rem", color: "#166534", fontWeight: 600 }}>Upcoming Teacher Leaves</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ─── TEACHERS ON LEAVE TODAY ─── */}
+              <div style={{ ...s.card, marginBottom: 20 }}>
+                <h3 style={{ fontSize: "1rem", fontWeight: 800, marginBottom: 14, display: "flex", alignItems: "center", gap: 8, color: "#92400E" }}>
+                  <i className="fas fa-chalkboard-teacher" style={{ color: "#D97706" }} />
+                  Aaj Chutti Par — Teachers
+                  {teachersOnLeaveToday.length > 0 && <span style={{ padding: "2px 10px", borderRadius: 99, background: "#FEF3C7", color: "#92400E", fontSize: ".72rem", fontWeight: 700 }}>{teachersOnLeaveToday.length} teacher</span>}
+                </h3>
+                {teachersOnLeaveToday.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "24px 0", color: "#6B7F99" }}>
+                    <i className="fas fa-check-circle" style={{ fontSize: "2rem", color: "#16A34A", marginBottom: 8, display: "block" }} />
+                    <p style={{ fontSize: ".85rem", fontWeight: 600 }}>Aaj koi teacher chutti par nahi hai ✓</p>
+                  </div>
+                ) : teachersOnLeaveToday.map(lv => {
+                  const days = lv.toDate && lv.toDate !== lv.fromDate
+                    ? Math.ceil((new Date(lv.toDate) - new Date(lv.fromDate)) / (1000*60*60*24)) + 1
+                    : 1;
+                  return (
+                    <div key={lv.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", borderRadius: 12, background: "#FFFBEB", border: "1px solid #FDE68A", marginBottom: 8 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: "linear-gradient(135deg, #D97706, #F59E0B)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ color: "#fff", fontWeight: 900, fontSize: "1rem" }}>{(lv.teacherName || "T").charAt(0)}</span>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: ".9rem", color: "#92400E" }}>{lv.teacherName}</div>
+                        <div style={{ fontSize: ".72rem", color: "#B45309" }}>{lv.teacherSubject || "—"}</div>
+                        <div style={{ fontSize: ".7rem", color: "#78350F", marginTop: 2 }}>
+                          <i className="fas fa-calendar-alt" style={{ marginRight: 4 }} />
+                          {lv.fromDate}{lv.toDate && lv.toDate !== lv.fromDate ? ` → ${lv.toDate}` : ""} · {days} din
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ padding: "3px 10px", borderRadius: 99, background: "#FEF3C7", color: "#92400E", fontSize: ".65rem", fontWeight: 700, border: "1px solid #FDE68A", marginBottom: 4 }}>On Leave</div>
+                        <div style={{ fontSize: ".65rem", color: "#B45309", maxWidth: 120, textAlign: "right" }}>{lv.reason?.substring(0, 40)}{lv.reason?.length > 40 ? "..." : ""}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* ─── STUDENTS ON LEAVE TODAY ─── */}
+              <div style={{ ...s.card, marginBottom: 20 }}>
+                <h3 style={{ fontSize: "1rem", fontWeight: 800, marginBottom: 14, display: "flex", alignItems: "center", gap: 8, color: "#991B1B" }}>
+                  <i className="fas fa-user-graduate" style={{ color: "#DC2626" }} />
+                  Aaj Chutti Par — Students
+                  {studentsOnLeaveToday.length > 0 && <span style={{ padding: "2px 10px", borderRadius: 99, background: "#FEF2F2", color: "#991B1B", fontSize: ".72rem", fontWeight: 700 }}>{studentsOnLeaveToday.length} student</span>}
+                </h3>
+                {studentsOnLeaveToday.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "24px 0", color: "#6B7F99" }}>
+                    <i className="fas fa-check-circle" style={{ fontSize: "2rem", color: "#16A34A", marginBottom: 8, display: "block" }} />
+                    <p style={{ fontSize: ".85rem", fontWeight: 600 }}>Aaj koi student chutti par nahi hai ✓</p>
+                  </div>
+                ) : studentsOnLeaveToday.map(lv => {
+                  const typeLabel = { full_day: "Full Day", half_day: "Half Day", emergency: "Emergency" }[lv.leaveType] || "Leave";
+                  const typeColor = { full_day: "#2563EB", half_day: "#7C3AED", emergency: "#DC2626" }[lv.leaveType] || "#6B7F99";
+                  return (
+                    <div key={lv.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", borderRadius: 12, background: "#FEF2F2", border: "1px solid #FCA5A5", marginBottom: 8 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: "linear-gradient(135deg, #DC2626, #EF4444)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ color: "#fff", fontWeight: 900, fontSize: "1rem" }}>{(lv.studentName || "S").charAt(0)}</span>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: ".9rem", color: "#991B1B" }}>{lv.studentName}</div>
+                        <div style={{ fontSize: ".72rem", color: "#B91C1C" }}>Class {lv.studentClass || "—"}</div>
+                        <div style={{ fontSize: ".7rem", color: "#7F1D1D", marginTop: 2 }}>{lv.reason?.substring(0, 60)}{lv.reason?.length > 60 ? "..." : ""}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ padding: "3px 10px", borderRadius: 99, background: "#fff", color: typeColor, fontSize: ".65rem", fontWeight: 700, border: `1px solid ${typeColor}33` }}>{typeLabel}</span>
+                        {lv.parentName && <div style={{ fontSize: ".62rem", color: "#B91C1C", marginTop: 4 }}>Parent: {lv.parentName}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* ─── UPCOMING TEACHER LEAVES ─── */}
+              {upcomingTeacherLeaves.length > 0 && (
+                <div style={{ ...s.card, marginBottom: 20 }}>
+                  <h3 style={{ fontSize: "1rem", fontWeight: 800, marginBottom: 14, display: "flex", alignItems: "center", gap: 8, color: "#1349A8" }}>
+                    <i className="fas fa-calendar-plus" style={{ color: "#1349A8" }} />
+                    Upcoming Teacher Leaves
+                  </h3>
+                  {upcomingTeacherLeaves.map(lv => {
+                    const days = lv.toDate && lv.toDate !== lv.fromDate
+                      ? Math.ceil((new Date(lv.toDate) - new Date(lv.fromDate)) / (1000*60*60*24)) + 1
+                      : 1;
+                    return (
+                      <div key={lv.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "10px 14px", borderRadius: 10, background: "#F0F4FA", border: "1px solid #D4DEF0", marginBottom: 6 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #1349A8, #2A6FE0)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <span style={{ color: "#fff", fontWeight: 800, fontSize: ".85rem" }}>{(lv.teacherName || "T").charAt(0)}</span>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 700, fontSize: ".85rem" }}>{lv.teacherName} <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>· {lv.teacherSubject || "—"}</span></div>
+                          <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>
+                            {lv.fromDate}{lv.toDate && lv.toDate !== lv.fromDate ? ` → ${lv.toDate}` : ""} · {days} din
+                          </div>
+                        </div>
+                        <span style={{ fontSize: ".72rem", color: "#1349A8", background: "#EFF6FF", padding: "3px 10px", borderRadius: 99, border: "1px solid #BFDBFE", fontWeight: 600 }}>Upcoming</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ─── RECENT STUDENT LEAVES (Last 7 days) ─── */}
+              <div style={s.card}>
+                <h3 style={{ fontSize: "1rem", fontWeight: 800, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                  <i className="fas fa-history" style={{ color: "#6B7F99" }} />
+                  Recent Student Leaves (Last 7 Days)
+                </h3>
+                {recentStudentLeaves.length === 0 ? (
+                  <p style={{ color: "#6B7F99", fontSize: ".84rem", textAlign: "center", padding: 16 }}>Koi recent student leave nahi hai</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".8rem" }}>
+                      <thead>
+                        <tr style={{ background: "#F8FAFD" }}>
+                          {["Date", "Student", "Class", "Type", "Reason"].map(h => (
+                            <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", borderBottom: "1px solid #E8EFF8", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {recentStudentLeaves.map((lv, i) => {
+                          const typeLabel = { full_day: "Full Day", half_day: "Half Day", emergency: "Emergency" }[lv.leaveType] || "—";
+                          const typeColor = { full_day: "#2563EB", half_day: "#7C3AED", emergency: "#DC2626" }[lv.leaveType] || "#6B7F99";
+                          return (
+                            <tr key={lv.id} style={{ borderBottom: i < recentStudentLeaves.length - 1 ? "1px solid #F0F4FA" : "none", background: i % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                              <td style={{ padding: "10px 12px", fontWeight: 600, whiteSpace: "nowrap" }}>{lv.date ? new Date(lv.date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "—"}</td>
+                              <td style={{ padding: "10px 12px", fontWeight: 600 }}>{lv.studentName || "—"}</td>
+                              <td style={{ padding: "10px 12px", color: "#6B7F99" }}>{lv.studentClass || "—"}</td>
+                              <td style={{ padding: "10px 12px" }}><span style={{ padding: "2px 8px", borderRadius: 6, background: typeColor + "15", color: typeColor, fontSize: ".7rem", fontWeight: 700 }}>{typeLabel}</span></td>
+                              <td style={{ padding: "10px 12px", color: "#4A5E78", maxWidth: 200 }}>{lv.reason?.substring(0, 50)}{lv.reason?.length > 50 ? "..." : ""}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          );
+        })()}
+
         {tab === "settings" && <>
           <h2 style={{ fontSize: "1.3rem", fontWeight: 800, marginBottom: 20 }}>Website Settings</h2>
 

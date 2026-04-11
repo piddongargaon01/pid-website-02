@@ -575,12 +575,12 @@ const AttendanceScreen = ({ student, attendance, holidays, leaveApplications = [
                       studentId: student.id, studentName: student.studentName || "", studentClass: student.class || "",
                       parentEmail: student.parentEmail || "", parentName: student.fatherName || student.motherName || "",
                       date: leaveForm.date, leaveType: leaveForm.leaveType || "full_day", reason: leaveForm.reason.trim(),
-                      status: "pending", createdAt: serverTimestamp(),
+                      status: "approved", createdAt: serverTimestamp(),
                     });
-                    setLeaveMsg("Leave application submitted successfully!");
+                    setLeaveMsg("✅ Chutti mil gayi! Leave approved ho gayi hai.");
                     setLeaveForm({ date: new Date().toISOString().split("T")[0], reason: "", leaveType: "full_day" });
                     setShowLeaveForm(false);
-                    setTimeout(() => setLeaveMsg(""), 3000);
+                    setTimeout(() => setLeaveMsg(""), 4000);
                   } catch (e) { setLeaveMsg("Error: " + e.message); }
                   setLeaveSaving(false);
                 }} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#f59e0b,#d97706)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{leaveSaving ? "Submitting..." : "Submit Application"}</button>
@@ -593,17 +593,17 @@ const AttendanceScreen = ({ student, attendance, holidays, leaveApplications = [
             {leaveApplications.length === 0 ? (
               <div style={{ textAlign: "center", padding: 24, color: "#94a3b8", fontSize: 12 }}>No leave applications yet</div>
             ) : leaveApplications.map(la => {
-              const statusColors = { pending: ["#f59e0b", "#fffbeb", "Pending"], approved: ["#16a34a", "#f0fdf4", "Approved"], rejected: ["#dc2626", "#fff1f2", "Rejected"] };
-              const [sc, sbg, sl] = statusColors[la.status] || statusColors.pending;
               const typeLabels = { full_day: "Full Day", half_day: "Half Day", emergency: "Emergency" };
+              const typeColors = { full_day: "#2563eb", half_day: "#7c3aed", emergency: "#dc2626" };
+              const typeColor = typeColors[la.leaveType] || "#2563eb";
               return (
-                <div key={la.id} style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid #e8eff8", marginBottom: 8, background: "#fafcfe" }}>
+                <div key={la.id} style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid #bbf7d0", marginBottom: 8, background: "#f0fdf4", borderLeft: "3px solid #16a34a" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{la.date ? new Date(la.date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: sc, background: sbg, padding: "3px 10px", borderRadius: 99, border: "1px solid " + sc + "33" }}>{sl}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", background: "#dcfce7", padding: "3px 10px", borderRadius: 99, border: "1px solid #86efac" }}>✓ Approved</span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: "#7c3aed", background: "#faf5ff", padding: "2px 8px", borderRadius: 6 }}>{typeLabels[la.leaveType] || la.leaveType}</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: typeColor, background: "#f8fafc", padding: "2px 8px", borderRadius: 6, border: `1px solid ${typeColor}22` }}>{typeLabels[la.leaveType] || la.leaveType}</span>
                   </div>
                   <p style={{ margin: 0, fontSize: 12, color: "#475569", lineHeight: 1.4 }}>{la.reason}</p>
                   {la.adminNote && <p style={{ margin: "6px 0 0", fontSize: 11, color: "#2563eb", background: "#eff6ff", padding: "6px 10px", borderRadius: 8 }}>Admin: {la.adminNote}</p>}
@@ -640,7 +640,7 @@ const AttendanceScreen = ({ student, attendance, holidays, leaveApplications = [
                   <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>Leave Application</p>
                   <p style={{ margin: "0 0 3px", fontSize: 11, color: "#78350f" }}>Type: {dayLeave.leaveType === "full_day" ? "Full Day" : dayLeave.leaveType === "half_day" ? "Half Day" : "Emergency"}</p>
                   <p style={{ margin: "0 0 3px", fontSize: 11, color: "#78350f" }}>Reason: {dayLeave.reason}</p>
-                  <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: dayLeave.status === "approved" ? "#16a34a" : dayLeave.status === "rejected" ? "#dc2626" : "#f59e0b" }}>Status: {dayLeave.status === "approved" ? "Approved" : dayLeave.status === "rejected" ? "Rejected" : "Pending"}</p>
+                  <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: dayLeave.status === "rejected" ? "#dc2626" : "#16a34a" }}>Status: {dayLeave.status === "rejected" ? "Rejected" : "✓ Approved"}</p>
                 </div>
               )}
               <button onClick={() => setCalSelectedDate(null)} style={{ marginTop: 12, width: "100%", padding: "10px 0", borderRadius: 10, border: "none", background: "#f1f5f9", color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Close</button>
