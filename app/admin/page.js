@@ -3671,7 +3671,9 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                               const hasIn = dayAtt.some(a => a.type === "in");
                               const hasAbsent = dayAtt.some(a => a.type === "absent");
                               const isFuture = d > todayStr;
+                              const tLeaveW = teacherLeaves.find(lv => lv.teacherId === t.id && lv.fromDate <= d && (lv.toDate || lv.fromDate) >= d);
                               if (hasIn) { totalP++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F0FDF4" }}><span style={{ color: "#16A34A", fontWeight: 800, fontSize: ".7rem" }}>P</span></td>; }
+                              if (tLeaveW && !isFuture) { return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#FFFBEB" }} title={tLeaveW.reason}><span style={{ color: "#D97706", fontWeight: 800, fontSize: ".65rem" }}>L</span></td>; }
                               if (hasAbsent || (!isFuture && !hasIn)) { if (!isFuture) totalA++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isFuture ? "#fff" : "#FEF2F2" }}><span style={{ color: isFuture ? "#B0C4DC" : "#DC2626", fontWeight: 700, fontSize: ".7rem" }}>{isFuture ? "—" : "A"}</span></td>; }
                               return <td key={d} style={{ padding: "4px 2px", textAlign: "center" }}><span style={{ color: "#B0C4DC", fontSize: ".65rem" }}>—</span></td>;
                             })}
@@ -4003,10 +4005,23 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                           ) : <span style={{ color: "#B0C4DC" }}>—</span>}
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                          {isHol ? <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>
-                            : tPresent ? <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>
-                            : isAbsentManual ? <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>
-                            : <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>}
+                          {(() => {
+                            const tLeave = teacherLeaves.find(lv =>
+                              lv.teacherId === t.id &&
+                              lv.fromDate <= attDate &&
+                              (lv.toDate || lv.fromDate) >= attDate
+                            );
+                            if (isHol) return <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>;
+                            if (tPresent) return <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>;
+                            if (tLeave) return (
+                              <div>
+                                <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: 99, fontSize: ".68rem", fontWeight: 800, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>🏖 Leave</span>
+                                <div style={{ fontSize: ".6rem", color: "#B45309", marginTop: 2, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tLeave.reason}>{tLeave.reason?.slice(0, 15)}{tLeave.reason?.length > 15 ? "..." : ""}</div>
+                              </div>
+                            );
+                            if (isAbsentManual) return <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>;
+                            return <span style={s.badge("#6B7F99", "#F0F4FA")}>—</span>;
+                          })()}
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
                           {!tPresent && !isAbsentManual && !isHol && (
