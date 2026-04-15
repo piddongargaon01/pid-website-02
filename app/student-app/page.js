@@ -76,6 +76,14 @@ export default function StudentApp() {
   const [quizHistory, setQuizHistory] = useState([]);
   const [tests, setTests] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [activeTest, setActiveTest] = useState(null);
+  const [testPhase, setTestPhase] = useState("idle");
+  const [testAnswers, setTestAnswers] = useState({});
+  const [currentQIdx, setCurrentQIdx] = useState(0);
+  const [testTimeLeft, setTestTimeLeft] = useState(0);
+  const [testTimerRef, setTestTimerRef] = useState(null);
+  const [completedTests, setCompletedTests] = useState(() => { try { return JSON.parse(localStorage.getItem("pid_done_tests")||"[]"); } catch(e){ return []; } });
+  const [seenNotifCount, setSeenNotifCount] = useState(() => { try { return Number(localStorage.getItem("pid_seen_notif")||0); } catch(e){ return 0; } });
 
   // ── Explore & My Batches State ──
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -267,14 +275,35 @@ export default function StudentApp() {
     const unsubs = [];
     unsubs.push(onSnapshot(collection(db, "courses"), s => setCourses(s.docs.map(d => ({ id: d.id, ...d.data() })))));
     unsubs.push(onSnapshot(collection(db, "study_materials"), s => {
-      const mats = s.docs.map(d => ({ id: d.id, ...d.data() }));
-      setMaterials(mats);
-      setTests(mats.filter(m => m.materialType === "test"));
+      setMaterials(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    }));
+    unsubs.push(onSnapshot(query(collection(db, "online_tests"), where("isActive", "==", true)), s => {
+      const all = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      const today = new Date().toISOString().split("T")[0];
+      const sc = student?.class||"", sm = student?.medium||"";
+      const sb = student?.board==="CG Board"?"CG":(student?.board||"");
+      const ok = (fc) => {
+        if (!fc||fc==="all") return true;
+        // Normalize student class: "12" → "12th", "11" → "11th" etc.
+        const scNorm = sc.includes("th") ? sc : (sc && !isNaN(parseInt(sc)) ? parseInt(sc)+"th" : sc);
+        if (fc==="JEE-NEET") return ["9th","10th","11th","12th"].includes(scNorm);
+        if (fc==="2nd-8th-All") return ["2nd","3rd","4th","5th","6th","7th","8th"].includes(scNorm);
+        const p=fc.split("-");
+        if (p[0]!==scNorm) return false;
+        if (p[1]&&sm){ const mo=(p[1]==="Eng"&&sm==="English")||((p[1]==="Hin"||p[1]==="Hindi")&&sm==="Hindi"); if(!mo) return false; }
+        const bp=p.slice(2);
+        if (bp.length>0&&sb){ const bo=bp.some(x=>x===sb||x==="All"||(x==="CB"&&sb==="CBSE")||(x==="IC"&&sb==="ICSE")); if(!bo) return false; }
+        return true;
+      };
+      const f=all.filter(t=>ok(t.forClass)&&(!t.scheduledDate||t.scheduledDate<=today));
+      f.sort((a,b)=>(b.createdAt?.toDate?.()||0)-(a.createdAt?.toDate?.()||0));
+      setTests(f);
     }));
     unsubs.push(onSnapshot(collection(db, "scheduled_notifications"), s => {
       const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
       arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-      setNotifications(arr.filter(n => !n.classFilter || n.classFilter === student?.class || n.classFilter === "all"));
+      const scN = (student?.class||"").includes("th") ? (student?.class||"") : ((student?.class && !isNaN(parseInt(student?.class))) ? parseInt(student?.class)+"th" : (student?.class||""));
+      setNotifications(arr.filter(n => !n.classFilter || n.classFilter === student?.class || n.classFilter === scN || n.classFilter === "all"));
     }));
     if (student?.id) {
       const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
@@ -1998,24 +2027,239 @@ Now, teach me: [TYPE YOUR TOPIC HERE]`}
 
           {/* ═══ 6. ONLINE TESTS TAB ═══ */}
           {activeTab === "tests" && (
-            <div style={{ padding: 20 }}>
-              <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 6px" }}>Online Tests</h2>
-              <p style={{ fontSize: ".82rem", color: T.text3, margin: "0 0 20px" }}>Give live MCQ tests from home.</p>
-              {tests.length === 0 ? (
-                <div style={{ textAlign: "center", padding: 40, color: T.text3 }}>
-                  <I n="clipboard-list" s={40} style={{ marginBottom: 12, opacity: 0.4 }} />
-                  <p>No active tests right now.</p>
-                </div>
-              ) : (
-                tests.map(t => (
-                  <div key={t.id} style={{ background: T.card, borderRadius: 18, border: `1px solid ${T.border}`, padding: 18, marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <h3 style={{ margin: "0 0 4px", fontSize: "1.05rem", fontWeight: 800 }}>{t.title}</h3>
-                      <p style={{ margin: 0, fontSize: ".78rem", color: T.text3 }}>{t.subject} • {t.duration || 60} mins</p>
+            <div style={{ padding: testPhase==="idle"?20:16 }}>
+
+              {/* ── RUNNING ── */}
+              {testPhase==="running" && activeTest && (() => {
+                const qs = activeTest.questions||[];
+                const q = qs[currentQIdx];
+                const mins = Math.floor(testTimeLeft/60);
+                const secs = testTimeLeft%60;
+                const answered = Object.keys(testAnswers).length;
+                return (
+                  <div>
+                    {/* Header bar */}
+                    <div style={{ background:T.card, borderRadius:14, padding:"10px 14px", marginBottom:12, border:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <div>
+                        <div style={{ fontSize:".7rem", color:T.text3, fontWeight:600 }}>{activeTest.title}</div>
+                        <div style={{ fontSize:".78rem", fontWeight:700 }}>{answered}/{qs.length} answered</div>
+                      </div>
+                      <div style={{ textAlign:"center" }}>
+                        <div style={{ fontSize:"1.5rem", fontWeight:900, color:testTimeLeft<60?"#DC2626":T.accent, fontVariantNumeric:"tabular-nums" }}>
+                          {String(mins).padStart(2,"0")}:{String(secs).padStart(2,"0")}
+                        </div>
+                        <div style={{ fontSize:".58rem", color:T.text3 }}>Time Left</div>
+                      </div>
+                      <button onClick={()=>{ if(window.confirm("Test submit karo? Baad mein change nahi hoga।")){ clearInterval(testTimerRef); setTestPhase("result"); } }}
+                        style={{ background:"#DC2626", color:"#fff", border:"none", padding:"8px 14px", borderRadius:10, fontWeight:700, fontSize:".75rem", cursor:"pointer" }}>
+                        Submit
+                      </button>
                     </div>
-                    <button style={{ background: `linear-gradient(135deg, ${T.orange}, #F59E0B)`, color: "#fff", border: "none", padding: "10px 22px", borderRadius: 12, fontWeight: 700, cursor: "pointer" }}>Start</button>
+                    {/* Question dots */}
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:14 }}>
+                      {qs.map((_,i)=>(
+                        <div key={i} style={{ width:28, height:28, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:".65rem", fontWeight:700,
+                          background: i===currentQIdx ? T.accent : testAnswers[i]!==undefined ? (dark?"#16532D":"#DCFCE7") : dark?"rgba(255,255,255,.08)":"#F0F4FA",
+                          color: i===currentQIdx ? "#fff" : testAnswers[i]!==undefined ? "#16A34A" : T.text3,
+                          border: i===currentQIdx ? `2px solid ${T.accent}` : "2px solid transparent",
+                          cursor:"pointer"
+                        }} onClick={()=>setCurrentQIdx(i)}>{i+1}</div>
+                      ))}
+                    </div>
+                    {/* Question card */}
+                    {q && (
+                      <div style={{ background:T.card, borderRadius:18, padding:20, border:`1px solid ${T.border}` }}>
+                        <div style={{ fontSize:".7rem", color:T.accent, fontWeight:700, marginBottom:8 }}>
+                          Question {currentQIdx+1} of {qs.length}
+                        </div>
+                        <p style={{ fontSize:".95rem", fontWeight:700, marginBottom:18, lineHeight:1.55 }}>{q.question}</p>
+                        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                          {(q.options||[]).map((opt,oi)=>{
+                            const selected = testAnswers[currentQIdx]===oi;
+                            return (
+                              <button key={oi} onClick={()=>{
+                                // Sirf select karo — auto-next nahi
+                                setTestAnswers(prev=>({...prev,[currentQIdx]:oi}));
+                              }} style={{
+                                background: selected ? `${T.accent}18` : dark?"rgba(255,255,255,.05)":"#F8FAFD",
+                                border: selected ? `2px solid ${T.accent}` : `1.5px solid ${T.border}`,
+                                borderRadius:12, padding:"12px 16px", textAlign:"left", cursor:"pointer",
+                                fontSize:".88rem", fontWeight: selected?700:400,
+                                color: selected?T.accent:T.text1, transition:"all .15s",
+                                display:"flex", alignItems:"center", gap:10
+                              }}>
+                                <span style={{ width:24, height:24, borderRadius:6, background:selected?T.accent:dark?"rgba(255,255,255,.1)":"#E8EFF8", color:selected?"#fff":T.text3, display:"flex", alignItems:"center", justifyContent:"center", fontSize:".72rem", fontWeight:800, flexShrink:0 }}>
+                                  {["A","B","C","D"][oi]}
+                                </span>
+                                {opt}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {/* Prev / Next */}
+                        <div style={{ display:"flex", justifyContent:"space-between", marginTop:18, gap:10 }}>
+                          <button onClick={()=>{ if(currentQIdx>0) setCurrentQIdx(i=>i-1); }}
+                            disabled={currentQIdx===0}
+                            style={{ flex:1, background:dark?"rgba(255,255,255,.08)":"#F0F4FA", border:"none", padding:"12px 0", borderRadius:12, fontWeight:600, cursor:currentQIdx===0?"not-allowed":"pointer", color:T.text2, fontSize:".85rem", opacity:currentQIdx===0?0.4:1 }}>
+                            ← Prev
+                          </button>
+                          {currentQIdx < qs.length-1 ? (
+                            <button onClick={()=>setCurrentQIdx(i=>i+1)}
+                              style={{ flex:1, background:T.accent, color:"#fff", border:"none", padding:"12px 0", borderRadius:12, fontWeight:700, cursor:"pointer", fontSize:".85rem" }}>
+                              Next →
+                            </button>
+                          ) : (
+                            <button onClick={()=>{ clearInterval(testTimerRef); setTestPhase("result"); }}
+                              style={{ flex:1, background:"#16A34A", color:"#fff", border:"none", padding:"12px 0", borderRadius:12, fontWeight:700, cursor:"pointer", fontSize:".85rem" }}>
+                              ✓ Finish Test
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))
+                );
+              })()}
+
+              {/* ── RESULT ── */}
+              {testPhase==="result" && activeTest && (() => {
+                const qs = activeTest.questions||[];
+                let correct=0;
+                qs.forEach((q,i)=>{ if(testAnswers[i]===q.correctAnswer) correct++; });
+                const pct = qs.length>0?Math.round((correct/qs.length)*100):0;
+                const grade = pct>=90?"A+":pct>=75?"A":pct>=60?"B":pct>=40?"C":"D";
+                const gc = pct>=75?"#16A34A":pct>=50?"#D98D04":"#DC2626";
+                return (
+                  <div>
+                    <div style={{ background:T.card, borderRadius:20, padding:28, textAlign:"center", marginBottom:16, border:`1px solid ${T.border}` }}>
+                      <div style={{ fontSize:"3.5rem", fontWeight:900, color:gc, lineHeight:1 }}>{grade}</div>
+                      <div style={{ fontSize:"1.6rem", fontWeight:800, marginTop:4 }}>{pct}%</div>
+                      <div style={{ fontSize:".82rem", color:T.text3, marginTop:4 }}>{correct} / {qs.length} correct</div>
+                      <div style={{ fontSize:".82rem", fontWeight:700, color:T.text2, marginTop:6 }}>{activeTest.title}</div>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginTop:16 }}>
+                        <div style={{ background:dark?"#0D2118":"#F0FDF4", borderRadius:10, padding:10 }}><div style={{ fontWeight:800, color:"#16A34A", fontSize:"1.2rem" }}>{correct}</div><div style={{ fontSize:".62rem", color:T.text3 }}>Correct</div></div>
+                        <div style={{ background:dark?"#2A0A0A":"#FEF2F2", borderRadius:10, padding:10 }}><div style={{ fontWeight:800, color:"#DC2626", fontSize:"1.2rem" }}>{qs.length-correct}</div><div style={{ fontSize:".62rem", color:T.text3 }}>Wrong</div></div>
+                        <div style={{ background:dark?"#162544":"#EFF6FF", borderRadius:10, padding:10 }}><div style={{ fontWeight:800, color:T.accent, fontSize:"1.2rem" }}>{qs.length}</div><div style={{ fontSize:".62rem", color:T.text3 }}>Total</div></div>
+                      </div>
+                    </div>
+                    {/* Answer Review */}
+                    <h3 style={{ fontSize:".92rem", fontWeight:800, marginBottom:12 }}>Answer Review</h3>
+                    {qs.map((q,i)=>{
+                      const ua = testAnswers[i];
+                      const isC = ua===q.correctAnswer;
+                      return (
+                        <div key={i} style={{ background:T.card, borderRadius:14, padding:14, marginBottom:10, border:`1.5px solid ${isC?"#86EFAC":"#FCA5A5"}` }}>
+                          <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                            <span style={{ background:isC?"#F0FDF4":"#FEF2F2", color:isC?"#16A34A":"#DC2626", borderRadius:6, padding:"2px 8px", fontSize:".65rem", fontWeight:800, flexShrink:0 }}>{isC?"✓":"✗"} Q{i+1}</span>
+                            <p style={{ margin:0, fontSize:".82rem", fontWeight:600 }}>{q.question}</p>
+                          </div>
+                          <div style={{ fontSize:".75rem", color:"#16A34A", marginBottom:2 }}>✓ Correct: {q.options?.[q.correctAnswer]}</div>
+                          {ua!==undefined&&!isC&&<div style={{ fontSize:".75rem", color:"#DC2626", marginBottom:4 }}>✗ Your Answer: {q.options?.[ua]}</div>}
+                          {q.explanation&&<div style={{ fontSize:".72rem", color:T.text3, background:dark?"rgba(255,255,255,.04)":"#F8FAFD", borderRadius:8, padding:"6px 10px", marginTop:6 }}>{q.explanation}</div>}
+                        </div>
+                      );
+                    })}
+                    <button onClick={async ()=>{
+                      // Test ko completed mark karo — dobara nahi khulega
+                      if(activeTest?.id){
+                        const newDone = [...new Set([...completedTests, activeTest.id])];
+                        setCompletedTests(newDone);
+                        try{ localStorage.setItem("pid_done_tests", JSON.stringify(newDone)); }catch(e){}
+                        // Firestore me result save karo
+                        try {
+                          const qs = activeTest.questions || [];
+                          let correct = 0;
+                          qs.forEach((q, i) => { if (testAnswers[i] === q.correctAnswer) correct++; });
+                          const pct = qs.length > 0 ? Math.round((correct / qs.length) * 100) : 0;
+                          await addDoc(collection(db, "test_submissions"), {
+                            testId: activeTest.id,
+                            testTitle: activeTest.title || "",
+                            subject: activeTest.subject || "",
+                            studentId: student?.id || "",
+                            studentName: student?.studentName || "",
+                            studentClass: student?.class || student?.presentClass || "",
+                            correct: correct,
+                            totalQuestions: qs.length,
+                            percentage: pct,
+                            answers: testAnswers,
+                            submittedAt: serverTimestamp(),
+                          });
+                        } catch(e){ console.error("Result save error:", e); }
+                      }
+                      setTestPhase("idle"); setActiveTest(null); setTestAnswers({}); setCurrentQIdx(0); setTestTimeLeft(0);
+                    }} style={{ width:"100%", background:T.accent, color:"#fff", border:"none", padding:"14px 0", borderRadius:14, fontWeight:700, fontSize:".92rem", cursor:"pointer", marginTop:8 }}>
+                      ← Back to Tests
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* ── IDLE — Test List ── */}
+              {testPhase==="idle" && (
+                <div>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                    <h2 style={{ fontSize:"1.3rem", fontWeight:800, margin:0 }}>Online Tests</h2>
+                    <span style={{ background:tests.length>0?T.accent:T.text3, color:"#fff", borderRadius:99, padding:"3px 12px", fontSize:".72rem", fontWeight:700 }}>{tests.length} Active</span>
+                  </div>
+                  <p style={{ fontSize:".82rem", color:T.text3, margin:"0 0 20px" }}>Ghar baithe MCQ tests do — results turant milenge।</p>
+                  {tests.length===0 ? (
+                    <div style={{ textAlign:"center", padding:50, color:T.text3 }}>
+                      <I n="clipboard-list" s={44} style={{ marginBottom:14, opacity:0.35 }} />
+                      <p style={{ fontWeight:700, fontSize:".92rem", marginBottom:6 }}>Abhi koi active test nahi hai।</p>
+                      <p style={{ fontSize:".78rem", opacity:0.6 }}>Jab teacher test publish karega, yahan dikhega।</p>
+                    </div>
+                  ) : tests.map(t => {
+                    const isDone = completedTests.includes(t.id);
+                    return (
+                      <div key={t.id} style={{ background:T.card, borderRadius:18, border:`1.5px solid ${isDone?"#86EFAC":`${T.accent}30`}`, padding:20, marginBottom:14 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                          <div style={{ flex:1 }}>
+                            <h3 style={{ margin:"0 0 5px", fontSize:"1.08rem", fontWeight:800 }}>{t.title}</h3>
+                            <p style={{ margin:0, fontSize:".78rem", color:T.text3 }}>{t.subject} · {t.duration||30} mins · {t.totalQuestions||t.questions?.length||0} Questions</p>
+                          </div>
+                          {isDone
+                            ? <span style={{ background:"#F0FDF4", color:"#16A34A", borderRadius:8, padding:"3px 10px", fontSize:".68rem", fontWeight:700, marginLeft:8, whiteSpace:"nowrap" }}>✓ Completed</span>
+                            : <span style={{ background:`${T.accent}18`, color:T.accent, borderRadius:8, padding:"3px 10px", fontSize:".68rem", fontWeight:700, marginLeft:8, whiteSpace:"nowrap" }}>{t.testType==="practice"?"Practice":t.testType==="weekly"?"Weekly":t.testType==="monthly"?"Monthly":"Test"}</span>
+                          }
+                        </div>
+                        {t.chapter&&<p style={{ margin:"0 0 8px", fontSize:".72rem", color:T.text3 }}><I n="bookmark" s={10} style={{ marginRight:5 }}/>{t.chapter}{t.topic?` — ${t.topic}`:""}</p>}
+                        {(t.scheduledDate||t.scheduledTime)&&(
+                          <div style={{ background:dark?"rgba(217,141,4,.1)":"#FFFBEB", borderRadius:8, padding:"6px 10px", marginBottom:10, display:"flex", alignItems:"center", gap:6 }}>
+                            <I n="clock" s={12} c={T.gold}/>
+                            <span style={{ fontSize:".72rem", color:T.gold, fontWeight:700 }}>Available from: {t.scheduledDate||""}{t.scheduledTime?" at "+t.scheduledTime:""}</span>
+                          </div>
+                        )}
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <div style={{ display:"flex", gap:6 }}>
+                            {t.difficulty&&<span style={{ fontSize:".65rem", color:T.text3, background:dark?"rgba(255,255,255,.06)":"#F0F4FA", borderRadius:6, padding:"2px 8px", textTransform:"capitalize" }}>{t.difficulty}</span>}
+                          </div>
+                          {isDone ? (
+                            <span style={{ fontSize:".78rem", color:"#16A34A", fontWeight:700 }}>✓ Test diya ja chuka hai</span>
+                          ) : (
+                            <button onClick={()=>{
+                              if(!t.questions||t.questions.length===0){ alert("Is test mein questions nahi hain। Admin se contact karo।"); return; }
+                              setActiveTest(t);
+                              setTestAnswers({});
+                              setCurrentQIdx(0);
+                              const secs=(t.duration||30)*60;
+                              setTestTimeLeft(secs);
+                              setTestPhase("running");
+                              const tid=setInterval(()=>{
+                                setTestTimeLeft(prev=>{
+                                  if(prev<=1){ clearInterval(tid); setTestPhase("result"); return 0; }
+                                  return prev-1;
+                                });
+                              },1000);
+                              setTestTimerRef(tid);
+                            }} style={{ background:`linear-gradient(135deg,${T.accent},${T.purple})`, color:"#fff", border:"none", padding:"10px 24px", borderRadius:12, fontWeight:700, cursor:"pointer", fontSize:".85rem", display:"flex", alignItems:"center", gap:6 }}>
+                              <I n="play" s={12}/>Start Test
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}
@@ -2023,36 +2267,79 @@ Now, teach me: [TYPE YOUR TOPIC HERE]`}
           {/* ═══ 7. NOTIFICATIONS TAB ═══ */}
           {activeTab === "notifications" && (
             <div style={{ padding: 20 }}>
-              <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 6px" }}>Notifications</h2>
-              <p style={{ fontSize: ".82rem", color: T.text3, margin: "0 0 20px" }}>Aapki class ki saari notifications</p>
-              {notifications.length === 0 ? (
-                <div style={{ textAlign: "center", padding: 50, color: T.text3 }}>
-                  <I n="bell-slash" s={40} style={{ marginBottom: 12, opacity: 0.4 }} />
-                  <p style={{ fontSize: ".85rem" }}>Koi notification nahi hai abhi</p>
-                </div>
-              ) : (
-                notifications.map(n => {
-                  const typeConfig = { fee: { icon: "rupee-sign", color: T.orange, bg: dark ? "#1C1A0E" : "#FFFBEB" }, test: { icon: "laptop-code", color: T.accent, bg: dark ? "#0F1E38" : "#EFF6FF" }, holiday: { icon: "calendar-alt", color: T.purple, bg: dark ? "#1A0F2E" : "#FAF5FF" }, result: { icon: "chart-bar", color: T.success, bg: dark ? "#0D2118" : "#ECFDF5" }, general: { icon: "bell", color: T.gold, bg: dark ? "#1C1A0E" : "#FFFBEB" } };
-                  const tc = typeConfig[n.notifType] || typeConfig.general;
-                  return (
-                    <div key={n.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 10, borderLeft: `3px solid ${tc.color}` }}>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 6px" }}>Notifications & Alerts</h2>
+              <p style={{ fontSize: ".82rem", color: T.text3, margin: "0 0 16px" }}>Tests, fees, holidays aur class alerts</p>
+
+              {/* Active Tests Section */}
+              {tests.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: ".72rem", fontWeight: 700, color: T.accent, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                    <I n="laptop-code" s={11} c={T.accent} />
+                    ACTIVE TESTS ({tests.length})
+                  </div>
+                  {tests.map(t => (
+                    <div key={t.id} style={{ background: dark ? "#0F1E38" : "#EFF6FF", border: `1.5px solid ${T.accent}40`, borderRadius: 14, padding: 14, marginBottom: 8, borderLeft: `3px solid ${T.accent}` }}>
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                        <div style={{ width: 38, height: 38, borderRadius: 10, background: tc.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
-                          <I n={tc.icon} s={16} c={tc.color} />
+                        <div style={{ width: 38, height: 38, borderRadius: 10, background: `${T.accent}20`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <I n="laptop-code" s={16} c={T.accent} />
                         </div>
                         <div style={{ flex: 1 }}>
-                          {n.title && <h4 style={{ margin: "0 0 4px", fontSize: ".88rem", fontWeight: 800 }}>{n.title}</h4>}
-                          <p style={{ margin: 0, fontSize: ".8rem", color: T.text2, lineHeight: 1.5 }}>{n.message}</p>
-                          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-                            <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: ".6rem", fontWeight: 700, background: tc.bg, color: tc.color, textTransform: "capitalize" }}>{n.notifType || "General"}</span>
-                            <span style={{ fontSize: ".6rem", color: T.text3 }}>{n.date || ""}</span>
-                            {n.time && <span style={{ fontSize: ".6rem", color: T.text3 }}>{n.time}</span>}
+                          <h4 style={{ margin: "0 0 3px", fontSize: ".88rem", fontWeight: 800 }}>New Test: {t.title}</h4>
+                          <p style={{ margin: 0, fontSize: ".75rem", color: T.text2 }}>
+                            {t.subject} · {t.totalQuestions || t.questions?.length || 0} Questions · {t.duration || 30} mins
+                          </p>
+                          {t.chapter && <p style={{ margin: "3px 0 0", fontSize: ".7rem", color: T.text3 }}>{t.chapter}{t.topic ? ` — ${t.topic}` : ""}</p>}
+                          <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: ".6rem", fontWeight: 700, background: `${T.accent}20`, color: T.accent, borderRadius: 5, padding: "2px 7px" }}>Test Available</span>
+                            {t.difficulty && <span style={{ fontSize: ".6rem", color: T.text3, background: dark ? "rgba(255,255,255,.08)" : "#F0F4FA", borderRadius: 5, padding: "2px 7px", textTransform: "capitalize" }}>{t.difficulty}</span>}
+                            <button onClick={() => setActiveTab("tests")} style={{ fontSize: ".65rem", fontWeight: 700, color: T.accent, background: "none", border: `1px solid ${T.accent}`, borderRadius: 6, padding: "2px 10px", cursor: "pointer" }}>
+                              Give Test →
+                            </button>
                           </div>
                         </div>
                       </div>
                     </div>
-                  );
-                })
+                  ))}
+                </div>
+              )}
+
+              {/* Scheduled Notifications */}
+              {notifications.length > 0 && (
+                <div>
+                  {tests.length > 0 && <div style={{ fontSize: ".72rem", fontWeight: 700, color: T.text3, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                    <I n="bell" s={11} />OTHER ALERTS
+                  </div>}
+                  {notifications.map(n => {
+                    const typeConfig = { fee: { icon: "rupee-sign", color: T.orange, bg: dark ? "#1C1A0E" : "#FFFBEB" }, test: { icon: "laptop-code", color: T.accent, bg: dark ? "#0F1E38" : "#EFF6FF" }, holiday: { icon: "calendar-alt", color: T.purple, bg: dark ? "#1A0F2E" : "#FAF5FF" }, result: { icon: "chart-bar", color: T.success, bg: dark ? "#0D2118" : "#ECFDF5" }, general: { icon: "bell", color: T.gold, bg: dark ? "#1C1A0E" : "#FFFBEB" } };
+                    const tc = typeConfig[n.notifType] || typeConfig.general;
+                    return (
+                      <div key={n.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 10, borderLeft: `3px solid ${tc.color}` }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                          <div style={{ width: 38, height: 38, borderRadius: 10, background: tc.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
+                            <I n={tc.icon} s={16} c={tc.color} />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            {n.title && <h4 style={{ margin: "0 0 4px", fontSize: ".88rem", fontWeight: 800 }}>{n.title}</h4>}
+                            <p style={{ margin: 0, fontSize: ".8rem", color: T.text2, lineHeight: 1.5 }}>{n.message}</p>
+                            <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                              <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: ".6rem", fontWeight: 700, background: tc.bg, color: tc.color, textTransform: "capitalize" }}>{n.notifType || "General"}</span>
+                              <span style={{ fontSize: ".6rem", color: T.text3 }}>{n.date || ""}</span>
+                              {n.time && <span style={{ fontSize: ".6rem", color: T.text3 }}>{n.time}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Empty state */}
+              {notifications.length === 0 && tests.length === 0 && (
+                <div style={{ textAlign: "center", padding: 50, color: T.text3 }}>
+                  <I n="bell-slash" s={40} style={{ marginBottom: 12, opacity: 0.4 }} />
+                  <p style={{ fontSize: ".85rem" }}>Koi notification nahi hai abhi</p>
+                </div>
               )}
             </div>
           )}
@@ -2147,17 +2434,21 @@ Now, teach me: [TYPE YOUR TOPIC HERE]`}
             { id: "profile", i: "user-circle", l: "Profile" }
           ].map(tab => {
             const isActive = activeTab === tab.id;
+            const unseen = tab.id==="notifications" ? Math.max(0, notifications.length+tests.length-seenNotifCount) : 0;
             return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: isActive ? T.accent : T.text3, cursor: "pointer", flex: 1, transition: "color 0.2s" }}>
-                <div style={{
-                  width: 34, height: 34, borderRadius: 10,
-                  background: isActive ? (dark ? `${T.accent}20` : "#EFF6FF") : "transparent",
-                  display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s",
-                  boxShadow: isActive ? `0 2px 8px ${T.accent}30` : "none"
-                }}>
+              <button key={tab.id} onClick={()=>{
+                setActiveTab(tab.id);
+                if(tab.id==="notifications"){
+                  const t=notifications.length+tests.length;
+                  setSeenNotifCount(t);
+                  try{ localStorage.setItem("pid_seen_notif",String(t)); }catch(e){}
+                }
+              }} style={{ background:"none", border:"none", display:"flex", flexDirection:"column", alignItems:"center", gap:3, color:isActive?T.accent:T.text3, cursor:"pointer", flex:1, transition:"color 0.2s" }}>
+                <div style={{ position:"relative", width:34, height:34, borderRadius:10, background:isActive?(dark?`${T.accent}20`:"#EFF6FF"):"transparent", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s", boxShadow:isActive?`0 2px 8px ${T.accent}30`:"none" }}>
                   <I n={tab.i} s={16} />
+                  {unseen>0&&<span style={{ position:"absolute", top:-4, right:-4, background:"#DC2626", color:"#fff", borderRadius:99, fontSize:".52rem", fontWeight:800, minWidth:16, height:16, display:"flex", alignItems:"center", justifyContent:"center", padding:"0 3px", border:`2px solid ${dark?"#0B1120":"#fff"}` }}>{unseen>9?"9+":unseen}</span>}
                 </div>
-                <span style={{ fontSize: ".62rem", fontWeight: isActive ? 800 : 600, letterSpacing: "0.3px" }}>{tab.l}</span>
+                <span style={{ fontSize:".62rem", fontWeight:isActive?800:600, letterSpacing:"0.3px" }}>{tab.l}</span>
               </button>
             );
           })}

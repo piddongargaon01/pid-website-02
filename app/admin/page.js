@@ -410,11 +410,28 @@ export default function AdminPanel() {
     if (batch.class === "JEE-NEET") {
       return list.filter(x => ["9th", "10th", "11th", "12th"].includes(x.class));
     }
+    // 2nd-8th = class 2 se 8 tak
+    if (batch.class === "2nd-8th") {
+      return list.filter(x => ["2nd","3rd","4th","5th","6th","7th","8th"].includes(x.class));
+    }
     return list.filter(x => {
+      // Class match — "12th" === "12th"
       const classMatch = x.class === batch.class || x.presentClass === batch.class;
+      if (!classMatch) return false;
+
+      // Medium match — "All" means koi bhi chalega
       const mediumMatch = batch.medium === "All" || !x.medium || x.medium === batch.medium;
-      const boardMatch = !batch.boards || batch.boards.length === 0 || !x.board || batch.boards.includes(x.board);
-      return classMatch && mediumMatch && boardMatch;
+
+      // Board match — "CG Board" ko "CG" se match karo, "CBSE" = "CBSE", "ICSE" = "ICSE"
+      const normalizeBoard = (b) => {
+        if (!b) return "";
+        if (b === "CG Board") return "CG";
+        return b; // CBSE, ICSE as-is
+      };
+      const studentBoard = normalizeBoard(x.board);
+      const boardMatch = !batch.boards || batch.boards.length === 0 || !x.board || batch.boards.includes(studentBoard);
+
+      return mediumMatch && boardMatch;
     });
   }
 
@@ -547,6 +564,10 @@ export default function AdminPanel() {
   const [otPdfFile, setOtPdfFile] = useState(null);
   const [otPdfProcessing, setOtPdfProcessing] = useState(false);
   const [otClassFilter, setOtClassFilter] = useState("all");
+  const [otView, setOtView] = useState("tests"); // "tests" | "results"
+  const [otResults, setOtResults] = useState([]); // test_submissions
+  const [otResultsLoading, setOtResultsLoading] = useState(false);
+  const [otSelectedTest, setOtSelectedTest] = useState(null); // specific test ke results
 
   // Fees states
   const [feeClassFilter, setFeeClassFilter] = useState("all");
@@ -561,6 +582,46 @@ export default function AdminPanel() {
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // ═══ FORM DRAFT SYSTEM — Tab switch pe data preserve karne ke liye ═══
+  // Har tab ka form data independently store hoga useRef me
+  const formDraftsRef = useRef({});
+
+  // Tab switch karte waqt current tab ka draft save karo, naye tab ka draft restore karo
+  function switchTab(newTab) {
+    // Current tab ka form state draft me save karo (sirf jab form open ho)
+    if (showForm || Object.keys(form).length > 0) {
+      formDraftsRef.current[tab] = {
+        form: { ...form },
+        showForm,
+        editId,
+      };
+    }
+    // Naye tab pe jao
+    setTab(newTab);
+    // Check karo naye tab ka koi draft hai ya nahi
+    const draft = formDraftsRef.current[newTab];
+    if (draft && draft.showForm) {
+      // Purana draft restore karo — form data vapas aa jayega
+      setForm(draft.form);
+      setShowForm(draft.showForm);
+      setEditId(draft.editId);
+    } else {
+      // Koi draft nahi — clean slate
+      setShowForm(false);
+      setEditId(null);
+      setForm({});
+    }
+  }
+
+  // Explicit reset — sirf save/cancel ke baad call hoga, tab switch pe NAHI
+  function resetForm() {
+    setShowForm(false);
+    setEditId(null);
+    setForm({});
+    // Current tab ka draft bhi clear karo
+    delete formDraftsRef.current[tab];
+  }
 
   // Sub-tabs for reviews/enquiries
   const [reviewTab, setReviewTab] = useState("pending");
@@ -756,18 +817,41 @@ Each question object must have:
 Example format:
 [{"question":"What is...","options":["A","B","C","D"],"correctAnswer":0,"explanation":"Because..."}]`;
 
-      const res = await fetch("/api/gemini", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
+      const GEMINI_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "AIzaSyCqy0iboM1-q0LSARp1NMvHnG_EvmL0ItA";
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+          }),
+        }
+      );
+      if (!res.ok) { const e = await res.text(); showMsg("Gemini Error: " + e.slice(0, 100)); setOtAiGenerating(false); return; }
       const data = await res.json();
-      if (data.error) { showMsg("AI Error: " + data.error); setOtAiGenerating(false); return; }
-
-      let text = data.response || data.text || "";
+      let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
       // Clean markdown fences
       text = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
-      const questions = JSON.parse(text);
+      const arrStart = text.indexOf("[");
+      const arrEnd = text.lastIndexOf("]");
+      if (arrStart === -1 || arrEnd === -1) {
+        showMsg("AI ne valid JSON array nahi diya. Dobara try karo.");
+        setOtAiGenerating(false);
+        return;
+      }
+      text = text.slice(arrStart, arrEnd + 1);
+      text = text.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ");
+      let questions;
+      try {
+        questions = JSON.parse(text);
+      } catch (parseErr) {
+        console.error("AI JSON parse error:", parseErr);
+        showMsg("AI response parse nahi hua — dobara try karo ya questions kam karo.");
+        setOtAiGenerating(false);
+        return;
+      }
 
       if (Array.isArray(questions) && questions.length > 0) {
         const formatted = questions.map(q => ({
@@ -813,21 +897,48 @@ Each question object must have:
 
 Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"explanation":"..."}]`;
 
-        const res = await fetch("/api/gemini", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            pdfBase64: base64,
-            mimeType: otPdfFile.type || "application/pdf",
-          }),
-        });
+        const GEMINI_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "AIzaSyCqy0iboM1-q0LSARp1NMvHnG_EvmL0ItA";
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { inline_data: { mime_type: otPdfFile.type || "application/pdf", data: base64 } },
+                  { text: prompt },
+                ],
+              }],
+              generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+            }),
+          }
+        );
+        if (!res.ok) { const e = await res.text(); showMsg("PDF Gemini Error: " + e.slice(0, 100)); setOtPdfProcessing(false); return; }
         const data = await res.json();
-        if (data.error) { showMsg("PDF Error: " + data.error); setOtPdfProcessing(false); return; }
-
-        let text = data.response || data.text || "";
+        let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        // Aggressive cleaning — markdown, extra text sab hatao
         text = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
-        const questions = JSON.parse(text);
+        // Sirf JSON array part extract karo — [ se ] tak
+        const arrStart = text.indexOf("[");
+        const arrEnd = text.lastIndexOf("]");
+        if (arrStart === -1 || arrEnd === -1) {
+          showMsg("PDF se valid JSON nahi mila. Clear/text-based PDF use karo.");
+          setOtPdfProcessing(false);
+          return;
+        }
+        text = text.slice(arrStart, arrEnd + 1);
+        // Unicode escape issues fix
+        text = text.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ");
+        let questions;
+        try {
+          questions = JSON.parse(text);
+        } catch (parseErr) {
+          console.error("JSON parse error:", parseErr, "\nText:", text.slice(0, 200));
+          showMsg("PDF ka response parse nahi hua. Gemini ne incomplete JSON diya — dobara try karo ya simpler PDF use karo.");
+          setOtPdfProcessing(false);
+          return;
+        }
 
         if (Array.isArray(questions) && questions.length > 0) {
           const formatted = questions.map(q => ({
@@ -1059,7 +1170,6 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
   }
 
   function showMsg(t) { setMsg(t); setTimeout(() => setMsg(""), 3000); }
-  function resetForm() { setShowForm(false); setEditId(null); setForm({}); }
 
   // ═══ ATTENDANCE RECORDS — Weekly Data Fetch ═══
   function getArWeekDates(offset = 0) {
@@ -1937,7 +2047,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           </div>
         </div>
         {tabs.map(t => (
-          <button key={t.id} onClick={() => { setTab(t.id); resetForm(); }} style={s.tabBtn(tab === t.id)}>
+          <button key={t.id} onClick={() => { switchTab(t.id); }} style={s.tabBtn(tab === t.id)}>
             <i className={`fas ${t.icon}`} style={{ width: 16, fontSize: ".8rem" }} />{t.label}
             {t.id === "reviews" && pendingReviews.length > 0 && <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", fontSize: ".6rem", padding: "2px 6px", borderRadius: 99 }}>{pendingReviews.length}</span>}
             {t.id === "enquiries" && activeEnquiries.length > 0 && <span style={{ marginLeft: "auto", background: "#1349A8", color: "#fff", fontSize: ".6rem", padding: "2px 6px", borderRadius: 99 }}>{activeEnquiries.length}</span>}
@@ -1982,9 +2092,9 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
               { n: examList.length, l: "Exams & Tests", c: "#1349A8", icon: "fa-file-alt", tab: "exams" },
               { n: otList.length, l: "Online Tests", c: "#7C3AED", icon: "fa-laptop", tab: "online_tests" },
               { n: holidays.length, l: "Holidays", c: "#D98D04", icon: "fa-calendar-check", tab: "holidays" },
-              { n: (() => { const tf = students.reduce((s, st) => s + Number(st.totalFee || 0), 0); const tp = students.reduce((s, st) => s + Number(st.enrollmentFeePaid || 0), 0); return `₹${Math.max(0, tf - tp).toLocaleString("en-IN")}`; })(), l: "Fee Due", c: "#DC2626", icon: "fa-rupee-sign", tab: "fees" },
+              { n: (() => { const tf = students.reduce((s, st) => s + Number(st.totalFee || 0), 0); const tp = students.reduce((s, st) => s + Number(st.inst1Amount || 0) + Number(st.inst2Amount || 0) + Number(st.inst3Amount || 0), 0); return `₹${Math.max(0, tf - tp).toLocaleString("en-IN")}`; })(), l: "Fee Due", c: "#DC2626", icon: "fa-rupee-sign", tab: "fees" },
             ].map((x, i) => (
-              <div key={i} style={{ ...s.stat, cursor: "pointer", transition: "all .2s", border: "1px solid #E8EFF8" }} onClick={() => { setTab(x.tab); resetForm(); }}>
+              <div key={i} style={{ ...s.stat, cursor: "pointer", transition: "all .2s", border: "1px solid #E8EFF8" }} onClick={() => { switchTab(x.tab); }}>
                 <i className={`fas ${x.icon}`} style={{ fontSize: "1.4rem", color: x.c, marginBottom: 8 }} />
                 <div style={{ fontSize: "1.8rem", fontWeight: 800, color: x.c }}>{x.n}</div>
                 <div style={{ fontSize: ".78rem", color: "#6B7F99" }}>{x.l}</div>
@@ -2005,7 +2115,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           </div>
 
           {/* ═══ COMMON AI DOUBTS — Saare students ke common questions ═══ */}
-          <div style={{ ...s.card, marginTop: 16, cursor: "pointer" }} onClick={() => setTab("ai_doubts")}>
+          <div style={{ ...s.card, marginTop: 16, cursor: "pointer" }} onClick={() => switchTab("ai_doubts")}>
             <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 8 }}><i className="fas fa-brain" style={{ marginRight: 8, color: "#7C3AED" }} />AI Doubt Insights — Common Questions</h3>
             <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Click to see what students are commonly asking AI → Subject-wise analysis</p>
           </div>
@@ -3148,14 +3258,123 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                 <input style={s.input} type="number" placeholder="e.g. 24000" value={form.totalFee || ""} onChange={e => setForm({ ...form, totalFee: e.target.value })} />
               </div>
               <div>
-                <label style={s.label}>Enrollment Fee Paid (₹)</label>
-                <input style={s.input} type="number" placeholder="e.g. 5000" value={form.enrollmentFeePaid || ""} onChange={e => setForm({ ...form, enrollmentFeePaid: e.target.value })} />
+                <label style={s.label}>Enrollment Fee Status</label>
+                <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+                  <button type="button"
+                    onClick={() => setForm({ ...form, enrollmentFeePaid: "paid" })}
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: `2px solid ${form.enrollmentFeePaid === "paid" ? "#16A34A" : "#D4DEF0"}`, background: form.enrollmentFeePaid === "paid" ? "#F0FDF4" : "#F8FAFD", color: form.enrollmentFeePaid === "paid" ? "#16A34A" : "#6B7F99", fontWeight: 700, fontSize: ".8rem", cursor: "pointer" }}>
+                    <i className="fas fa-check-circle" style={{ marginRight: 4 }} />Paid
+                  </button>
+                  <button type="button"
+                    onClick={() => setForm({ ...form, enrollmentFeePaid: "not_paid" })}
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: `2px solid ${form.enrollmentFeePaid === "not_paid" ? "#DC2626" : "#D4DEF0"}`, background: form.enrollmentFeePaid === "not_paid" ? "#FEF2F2" : "#F8FAFD", color: form.enrollmentFeePaid === "not_paid" ? "#DC2626" : "#6B7F99", fontWeight: 700, fontSize: ".8rem", cursor: "pointer" }}>
+                    <i className="fas fa-times-circle" style={{ marginRight: 4 }} />Not Paid
+                  </button>
+                </div>
               </div>
               <div>
                 <label style={s.label}>Remaining Fee</label>
-                <div style={{ padding: "9px 12px", borderRadius: 8, background: form.totalFee && form.enrollmentFeePaid ? ((Number(form.totalFee) - Number(form.enrollmentFeePaid)) > 0 ? "#FEF2F2" : "#F0FDF4") : "#F8FAFD", border: "1px solid #D4DEF0", fontSize: ".85rem", fontWeight: 700, color: form.totalFee && form.enrollmentFeePaid ? ((Number(form.totalFee) - Number(form.enrollmentFeePaid)) > 0 ? "#DC2626" : "#16A34A") : "#6B7F99", minHeight: 38, display: "flex", alignItems: "center" }}>
-                  {form.totalFee && form.enrollmentFeePaid ? `₹${Math.max(0, Number(form.totalFee) - Number(form.enrollmentFeePaid)).toLocaleString("en-IN")}` : "—"}
+                <div style={{ padding: "9px 12px", borderRadius: 8, background: form.totalFee ? "#FEF2F2" : "#F8FAFD", border: "1px solid #D4DEF0", fontSize: ".85rem", fontWeight: 700, color: form.totalFee ? "#DC2626" : "#6B7F99", minHeight: 38, display: "flex", alignItems: "center" }}>
+                  {form.totalFee ? `₹${Number(form.totalFee).toLocaleString("en-IN")}` : "—"}
                 </div>
+              </div>
+            </div>
+
+            {/* ── 1st INSTALLMENT AMOUNT + SUBJECT DISTRIBUTION ── */}
+            <div style={{ background: "#F0FDF4", borderRadius: 10, padding: 14, border: "1px solid #86EFAC", marginBottom: 12, marginTop: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                <p style={{ fontSize: ".82rem", fontWeight: 700, color: "#166534", margin: 0 }}><i className="fas fa-rupee-sign" style={{ marginRight: 6 }} />1st Installment — Amount & Subject Distribution</p>
+                <button type="button"
+                  onClick={() => {
+                    const amt = Number(form.inst1Amount || 0);
+                    if (!amt) return;
+                    const subs = [form.subject1, form.subject2, form.subject3, form.subject4, form.subject5, form.subject6].filter(Boolean);
+                    if (!subs.length) return;
+                    const each = Math.floor(amt / subs.length);
+                    const rem = amt - (each * subs.length);
+                    const newForm = { ...form };
+                    subs.forEach((_, i) => { newForm[`fee${i + 1}`] = String(i === 0 ? each + rem : each); });
+                    setForm(newForm);
+                  }}
+                  style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #16A34A", background: "#16A34A", color: "#fff", fontSize: ".75rem", fontWeight: 700, cursor: "pointer" }}>
+                  <i className="fas fa-magic" style={{ marginRight: 5 }} />Auto Distribute
+                </button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                <div>
+                  <label style={s.label}>1st Installment Amount (₹) *</label>
+                  <input style={{ ...s.input, borderColor: "#86EFAC" }} type="number" placeholder="e.g. 8000" value={form.inst1Amount || ""}
+                    onChange={e => setForm({ ...form, inst1Amount: e.target.value })} />
+                </div>
+                <div>
+                  <label style={s.label}>Payment Date</label>
+                  <input style={s.input} type="date" value={form.inst1Date || new Date().toISOString().split("T")[0]}
+                    onChange={e => setForm({ ...form, inst1Date: e.target.value })} />
+                </div>
+              </div>
+              <p style={{ fontSize: ".72rem", color: "#166534", margin: "0 0 8px" }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />Auto Distribute dabao — amount subjects me barabar distribute ho jayegi. Manually bhi change kar sakte ho.</p>
+              {/* Subject Fee distribution (shared with Subject-wise Fee section) */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                {[1,2,3,4,5,6].map(n => form[`subject${n}`] ? (
+                  <div key={n}>
+                    <label style={{ ...s.label, color: "#166534" }}>{form[`subject${n}`]} Fee (₹)</label>
+                    <input style={{ ...s.input, borderColor: "#86EFAC" }} type="number" placeholder="0"
+                      value={form[`fee${n}`] || ""}
+                      onChange={e => {
+                        const newForm = { ...form, [`fee${n}`]: e.target.value };
+                        const total = [1,2,3,4,5,6].reduce((s, i) => s + Number(newForm[`fee${i}`] || 0), 0);
+                        setForm({ ...newForm, inst1Amount: String(total) });
+                      }} />
+                  </div>
+                ) : null)}
+              </div>
+            </div>
+
+            {/* ── 2nd INSTALLMENT (optional) ── */}
+            <div style={{ background: "#EFF6FF", borderRadius: 10, padding: 14, border: "1px solid #BFDBFE", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                <p style={{ fontSize: ".82rem", fontWeight: 700, color: "#1E3A8A", margin: 0 }}><i className="fas fa-layer-group" style={{ marginRight: 6 }} />2nd Installment (Optional)</p>
+                <button type="button"
+                  onClick={() => {
+                    const amt = Number(form.inst2Amount || 0);
+                    if (!amt) return;
+                    const subs = [form.subject1, form.subject2, form.subject3, form.subject4, form.subject5, form.subject6].filter(Boolean);
+                    if (!subs.length) return;
+                    const each = Math.floor(amt / subs.length);
+                    const rem = amt - (each * subs.length);
+                    const newForm = { ...form };
+                    subs.forEach((_, i) => { newForm[`fee2_sub${i + 1}`] = String(i === 0 ? each + rem : each); });
+                    setForm(newForm);
+                  }}
+                  style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #1349A8", background: "#1349A8", color: "#fff", fontSize: ".75rem", fontWeight: 700, cursor: "pointer" }}>
+                  <i className="fas fa-magic" style={{ marginRight: 5 }} />Auto Distribute
+                </button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                <div>
+                  <label style={s.label}>2nd Installment Amount (₹)</label>
+                  <input style={{ ...s.input, borderColor: "#BFDBFE" }} type="number" placeholder="e.g. 8000" value={form.inst2Amount || ""}
+                    onChange={e => setForm({ ...form, inst2Amount: e.target.value })} />
+                </div>
+                <div>
+                  <label style={s.label}>Payment Date</label>
+                  <input style={s.input} type="date" value={form.inst2Date || ""}
+                    onChange={e => setForm({ ...form, inst2Date: e.target.value })} />
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                {[1,2,3,4,5,6].map(n => form[`subject${n}`] ? (
+                  <div key={n}>
+                    <label style={{ ...s.label, color: "#1E3A8A" }}>{form[`subject${n}`]} Fee (₹)</label>
+                    <input style={{ ...s.input, borderColor: "#BFDBFE" }} type="number" placeholder="0"
+                      value={form[`fee2_sub${n}`] || ""}
+                      onChange={e => {
+                        const newForm = { ...form, [`fee2_sub${n}`]: e.target.value };
+                        const total = [1,2,3,4,5,6].reduce((s, i) => s + Number(newForm[`fee2_sub${i}`] || 0), 0);
+                        setForm({ ...newForm, inst2Amount: String(total) });
+                      }} />
+                  </div>
+                ) : null)}
               </div>
             </div>
 
@@ -3172,24 +3391,14 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
               <div><label style={s.label}>Subject 3</label><input style={s.input} placeholder="Maths / Bio" value={form.subject3 || ""} onChange={e => setForm({ ...form, subject3: e.target.value })} /></div>
             </div>
 
-            {/* ── SUBJECT-WISE FEE (Receipt ke liye) ── */}
-            <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-receipt" style={{ color: "#D98D04" }} /> Subject-wise Fee (Receipt ke liye)</div>
+            {/* ── SUBJECT-WISE FEE (Receipt ke liye) — 1st installment ke saath sync ── */}
+            <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-receipt" style={{ color: "#D98D04" }} /> Subject Names (4, 5, 6)</div>
             <div style={{ background: "#FFFBEB", borderRadius: 10, padding: 14, border: "1px solid #FDE68A", marginBottom: 12 }}>
-              <p style={{ fontSize: ".76rem", color: "#92400E", margin: "0 0 10px 0" }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} /> Ye fees receipt me subject-wise print hongi. Khali chhodoge toh receipt me nahi dikhega.</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <div><label style={s.label}>{form.subject1 || "Subject 1"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 4000" value={form.fee1 || ""} onChange={e => setForm({ ...form, fee1: e.target.value })} /></div>
-                <div><label style={s.label}>{form.subject2 || "Subject 2"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 4000" value={form.fee2 || ""} onChange={e => setForm({ ...form, fee2: e.target.value })} /></div>
-                <div><label style={s.label}>{form.subject3 || "Subject 3"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 4000" value={form.fee3 || ""} onChange={e => setForm({ ...form, fee3: e.target.value })} /></div>
-              </div>
+              <p style={{ fontSize: ".76rem", color: "#92400E", margin: "0 0 10px 0" }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} /> Subjects 4, 5, 6 ke naam yahan bharo. Fee distribution upar 1st/2nd Installment section me hogi.</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                 <div><label style={s.label}>Subject 4 Name</label><input style={s.input} placeholder="Science / English" value={form.subject4 || ""} onChange={e => setForm({ ...form, subject4: e.target.value })} /></div>
                 <div><label style={s.label}>Subject 5 Name</label><input style={s.input} placeholder="English / SST" value={form.subject5 || ""} onChange={e => setForm({ ...form, subject5: e.target.value })} /></div>
                 <div><label style={s.label}>Subject 6 Name</label><input style={s.input} placeholder="Social Study" value={form.subject6 || ""} onChange={e => setForm({ ...form, subject6: e.target.value })} /></div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <div><label style={s.label}>{form.subject4 || "Subject 4"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 3000" value={form.fee4 || ""} onChange={e => setForm({ ...form, fee4: e.target.value })} /></div>
-                <div><label style={s.label}>{form.subject5 || "Subject 5"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 3000" value={form.fee5 || ""} onChange={e => setForm({ ...form, fee5: e.target.value })} /></div>
-                <div><label style={s.label}>{form.subject6 || "Subject 6"} Fee (₹)</label><input style={s.input} type="number" placeholder="e.g. 3000" value={form.fee6 || ""} onChange={e => setForm({ ...form, fee6: e.target.value })} /></div>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -3326,10 +3535,14 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                         Batch: {st.batchStartDate} → {st.batchEndDate} {isActive ? "(Active)" : isExpired ? "(Expired)" : "(Upcoming)"}
                       </span>;
                     })()}
-                    {st.totalFee && <span style={{ color: (Number(st.totalFee) - Number(st.enrollmentFeePaid || 0)) > 0 ? "#DC2626" : "#16A34A", fontWeight: 600 }}>
-                      <i className="fas fa-rupee-sign" style={{ marginRight: 3 }} />
-                      Due: ₹{Math.max(0, Number(st.totalFee) - Number(st.enrollmentFeePaid || 0)).toLocaleString("en-IN")}
-                    </span>}
+                    {st.totalFee && (() => {
+                      const instPaid = Number(st.inst1Amount || 0) + Number(st.inst2Amount || 0) + Number(st.inst3Amount || 0);
+                      const dueAmt = Math.max(0, Number(st.totalFee) - instPaid);
+                      return <span style={{ color: dueAmt > 0 ? "#DC2626" : "#16A34A", fontWeight: 600 }}>
+                        <i className="fas fa-rupee-sign" style={{ marginRight: 3 }} />
+                        {instPaid > 0 ? `Paid: ₹${instPaid.toLocaleString("en-IN")} · ` : ""}Due: ₹{dueAmt.toLocaleString("en-IN")}
+                      </span>;
+                    })()}
                   </div>
                 </div>
 
@@ -3666,14 +3879,18 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                               if (isHol || isSun) {
                                 return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isHol ? "#FFFBEB" : "#FEF2F2" }}><span style={{ fontSize: ".6rem", fontWeight: 700, color: isHol ? "#D98D04" : "#FCA5A5" }}>{isHol ? "H" : "S"}</span></td>;
                               }
+                              // Batch validity check — batch start se pehle ya end ke baad = colorless
+                              const isBeforeBatch = st.batchStartDate && d < st.batchStartDate;
+                              const isAfterBatch = st.batchEndDate && d > st.batchEndDate;
+                              if (isBeforeBatch || isAfterBatch) {
+                                return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F8FAFD" }}><span style={{ color: "#D4DEF0", fontSize: ".6rem" }}>·</span></td>;
+                              }
                               totalWorking++;
                               const dayAtt = multiDayAtt.filter(a => a.studentId === st.id && a.date === d);
                               const hasIn = dayAtt.some(a => a.type === "in");
                               const hasAbsent = dayAtt.some(a => a.type === "absent");
                               const isFuture = d > todayStr;
-                              const tLeaveW = teacherLeaves.find(lv => lv.teacherId === t.id && lv.fromDate <= d && (lv.toDate || lv.fromDate) >= d);
                               if (hasIn) { totalP++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F0FDF4" }}><span style={{ color: "#16A34A", fontWeight: 800, fontSize: ".7rem" }}>P</span></td>; }
-                              if (tLeaveW && !isFuture) { return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#FFFBEB" }} title={tLeaveW.reason}><span style={{ color: "#D97706", fontWeight: 800, fontSize: ".65rem" }}>L</span></td>; }
                               if (hasAbsent || (!isFuture && !hasIn)) { if (!isFuture) totalA++; return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isFuture ? "#fff" : "#FEF2F2" }}><span style={{ color: isFuture ? "#B0C4DC" : "#DC2626", fontWeight: 700, fontSize: ".7rem" }}>{isFuture ? "—" : "A"}</span></td>; }
                               return <td key={d} style={{ padding: "4px 2px", textAlign: "center" }}><span style={{ color: "#B0C4DC", fontSize: ".65rem" }}>—</span></td>;
                             })}
@@ -3732,14 +3949,18 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                     </button>
                   </div>
 
-                  {/* Stats Row */}
+                  {/* Stats Row — Monthly */}
                   {(() => {
                     const daysInMonth = new Date(calStudentYear, calStudentMonth + 1, 0).getDate();
                     const todayStr = new Date().toISOString().split("T")[0];
+                    const batchStart = calendarStudent?.batchStartDate || "";
+                    const batchEnd = calendarStudent?.batchEndDate || "";
                     let totalP = 0, totalA = 0, totalH = 0;
                     for (let i = 1; i <= daysInMonth; i++) {
                       const dateStr = `${calStudentYear}-${String(calStudentMonth + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
                       if (dateStr > todayStr) continue;
+                      if (batchStart && dateStr < batchStart) continue;
+                      if (batchEnd && dateStr > batchEnd) continue;
                       if (isHoliday(dateStr) || new Date(dateStr + "T00:00:00").getDay() === 0) { totalH++; continue; }
                       const dayAtt = calMonthAtt.filter(a => a.date === dateStr);
                       if (dayAtt.some(a => a.type === "in")) totalP++;
@@ -3747,11 +3968,59 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                     }
                     const totalWorking = totalP + totalA;
                     return (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
-                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#F0FDF4" }}><div style={{ fontWeight: 800, color: "#16A34A", fontSize: "1.1rem" }}>{totalP}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Present</div></div>
-                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF2F2" }}><div style={{ fontWeight: 800, color: "#DC2626", fontSize: "1.1rem" }}>{totalA}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Absent</div></div>
-                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF3C7" }}><div style={{ fontWeight: 800, color: "#D98D04", fontSize: "1.1rem" }}>{totalH}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Holiday</div></div>
-                        <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#EFF6FF" }}><div style={{ fontWeight: 800, color: "#1349A8", fontSize: "1.1rem" }}>{totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0}%</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Attendance</div></div>
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", marginBottom: 6 }}>This Month</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#F0FDF4" }}><div style={{ fontWeight: 800, color: "#16A34A", fontSize: "1.1rem" }}>{totalP}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Present</div></div>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF2F2" }}><div style={{ fontWeight: 800, color: "#DC2626", fontSize: "1.1rem" }}>{totalA}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Absent</div></div>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF3C7" }}><div style={{ fontWeight: 800, color: "#D98D04", fontSize: "1.1rem" }}>{totalH}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Holiday</div></div>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#EFF6FF" }}><div style={{ fontWeight: 800, color: "#1349A8", fontSize: "1.1rem" }}>{totalWorking > 0 ? Math.round((totalP / totalWorking) * 100) : 0}%</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Attendance</div></div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Overall Attendance — Batch start se aaj tak */}
+                  {(() => {
+                    const todayStr = new Date().toISOString().split("T")[0];
+                    const batchStart = calendarStudent?.batchStartDate || "";
+                    const batchEnd = calendarStudent?.batchEndDate || "";
+                    if (!batchStart) return null;
+                    const effectiveEnd = batchEnd && batchEnd < todayStr ? batchEnd : todayStr;
+                    let ovP = 0, ovA = 0, ovH = 0;
+                    const start = new Date(batchStart);
+                    const end = new Date(effectiveEnd);
+                    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                      const dateStr = d.toISOString().split("T")[0];
+                      if (new Date(dateStr + "T00:00:00").getDay() === 0 || isHoliday(dateStr)) { ovH++; continue; }
+                      const dayAtt = calMonthAtt.filter(a => a.date === dateStr);
+                      if (dayAtt.some(a => a.type === "in")) ovP++;
+                      else ovA++;
+                    }
+                    const ovWorking = ovP + ovA;
+                    const ovPct = ovWorking > 0 ? Math.round((ovP / ovWorking) * 100) : 0;
+                    const pctColor = ovPct >= 75 ? "#16A34A" : ovPct >= 50 ? "#D98D04" : "#DC2626";
+                    const pctBg = ovPct >= 75 ? "#F0FDF4" : ovPct >= 50 ? "#FFFBEB" : "#FEF2F2";
+                    return (
+                      <div style={{ background: "#F8FAFD", borderRadius: 10, border: "1px solid #D4DEF0", padding: "10px 14px", marginBottom: 14 }}>
+                        <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", marginBottom: 8 }}>
+                          <i className="fas fa-chart-bar" style={{ marginRight: 5, color: "#1349A8" }} />
+                          Overall Attendance — {batchStart} se {effectiveEnd} tak
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#F0FDF4" }}><div style={{ fontWeight: 800, color: "#16A34A", fontSize: "1.2rem" }}>{ovP}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Present</div></div>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF2F2" }}><div style={{ fontWeight: 800, color: "#DC2626", fontSize: "1.2rem" }}>{ovA}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Absent</div></div>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: "#FEF3C7" }}><div style={{ fontWeight: 800, color: "#D98D04", fontSize: "1.2rem" }}>{ovH}</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Holiday</div></div>
+                          <div style={{ textAlign: "center", padding: 8, borderRadius: 8, background: pctBg }}><div style={{ fontWeight: 800, color: pctColor, fontSize: "1.2rem" }}>{ovPct}%</div><div style={{ fontSize: ".65rem", color: "#6B7F99" }}>Overall</div></div>
+                        </div>
+                        {/* Progress bar */}
+                        <div style={{ background: "#E8EFF8", borderRadius: 99, height: 8, overflow: "hidden" }}>
+                          <div style={{ height: "100%", borderRadius: 99, background: `linear-gradient(90deg, ${pctColor}, ${pctColor}88)`, width: `${ovPct}%`, transition: "width .5s" }} />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                          <span style={{ fontSize: ".62rem", color: "#6B7F99" }}>Total Working Days: {ovWorking}</span>
+                          <span style={{ fontSize: ".62rem", fontWeight: 700, color: pctColor }}>{ovPct >= 75 ? "✓ Good" : ovPct >= 50 ? "⚠ Average" : "✗ Low"}</span>
+                        </div>
                       </div>
                     );
                   })()}
@@ -3793,8 +4062,16 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                         const checkIn = dayAtt.find(a => a.type === "in");
                         const checkOut = dayAtt.find(a => a.type === "out");
 
+                        // Batch validity check for calendar
+                        const batchStart = calendarStudent?.batchStartDate || "";
+                        const batchEnd = calendarStudent?.batchEndDate || "";
+                        const isBeforeBatchCal = batchStart && dateStr < batchStart;
+                        const isAfterBatchCal = batchEnd && dateStr > batchEnd;
+                        const isOutsideBatch = isBeforeBatchCal || isAfterBatchCal;
+
                         let bg = "#F8FAFD"; let border = "1px solid #E8EFF8"; let color = "#6B7F99";
-                        if (isHol) { bg = "#FEF3C7"; border = "1px solid #FDE68A"; color = "#D98D04"; }
+                        if (isOutsideBatch) { bg = "#F8FAFD"; border = "1px solid #EEF2F8"; color = "#D4DEF0"; }
+                        else if (isHol) { bg = "#FEF3C7"; border = "1px solid #FDE68A"; color = "#D98D04"; }
                         else if (isSun) { bg = "#F3E8FF"; border = "1px solid #D8B4FE"; color = "#7C3AED"; }
                         else if (isFuture) { bg = "#F0F4FA"; border = "1px solid #D4DEF0"; color = "#B0C4DC"; }
                         else if (hasIn) { bg = "#DCFCE7"; border = "1px solid #86EFAC"; color = "#16A34A"; }
@@ -3902,7 +4179,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                             <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99", position: "sticky", left: 0, background: "#fff", zIndex: 1 }}>{idx + 1}</td>
                             <td style={{ padding: "8px 10px", position: "sticky", left: 40, background: "#fff", zIndex: 1 }}>
                               <div style={{ cursor: "pointer" }} onClick={() => {
-                                const teacherAsStudent = { id: personKey, studentName: t.name, class: "Teacher", rfidCode: t.rfidCode || "", photo: t.photo || "" };
+                                const teacherAsStudent = { id: personKey, studentName: t.name, class: "Teacher", rfidCode: t.rfidCode || "", photo: t.photo || "", batchStartDate: t.cardValidFrom || "", batchEndDate: t.cardValidTo || "" };
                                 fetchStudentCalendar(teacherAsStudent, new Date(attDate).getFullYear(), new Date(attDate).getMonth());
                               }}>
                                 <div style={{ fontWeight: 600, fontSize: ".76rem", color: "#059669", textDecoration: "underline", textDecorationStyle: "dotted" }}>{t.name}</div>
@@ -3914,6 +4191,12 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                               const isSun = new Date(d + "T00:00:00").getDay() === 0;
                               if (isHol || isSun) {
                                 return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: isHol ? "#FFFBEB" : "#FEF2F2" }}><span style={{ fontSize: ".6rem", fontWeight: 700, color: isHol ? "#D98D04" : "#FCA5A5" }}>{isHol ? "H" : "S"}</span></td>;
+                              }
+                              // Card validity check — card active hone se pehle ya expire ke baad = colorless
+                              const isBeforeCard = t.cardValidFrom && d < t.cardValidFrom;
+                              const isAfterCard = t.cardValidTo && d > t.cardValidTo;
+                              if (isBeforeCard || isAfterCard) {
+                                return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F8FAFD" }}><span style={{ color: "#D4DEF0", fontSize: ".6rem" }}>·</span></td>;
                               }
                               totalWorking++;
                               const dayAtt = multiDayAtt.filter(a => (a.studentId === personKey || a.rfidCode === (t.rfidCode || `TEACHER_${t.id}`)) && a.date === d);
@@ -3969,7 +4252,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                         <td style={{ padding: "10px 14px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => {
                             // Open teacher calendar — reuse student calendar with teacher data
-                            const teacherAsStudent = { id: `teacher_${t.id}`, studentName: t.name, class: "Teacher", rfidCode: t.rfidCode || "", photo: t.photo || "" };
+                            const teacherAsStudent = { id: `teacher_${t.id}`, studentName: t.name, class: "Teacher", rfidCode: t.rfidCode || "", photo: t.photo || "", batchStartDate: t.cardValidFrom || "", batchEndDate: t.cardValidTo || "" };
                             fetchStudentCalendar(teacherAsStudent, new Date().getFullYear(), new Date().getMonth());
                           }}>
                             <div style={{ width: 32, height: 32, borderRadius: 8, overflow: "hidden", background: "linear-gradient(135deg,#059669,#34D399)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -5187,6 +5470,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                         {[
                           { id: "overview", icon: "fa-th-large", label: "Overview" },
                           { id: "exams", icon: "fa-file-alt", label: "Exam Results" },
+                          { id: "online_tests", icon: "fa-laptop", label: "Online Tests" },
                           { id: "quizzes", icon: "fa-robot", label: "AI Quiz (" + perfQuizData.length + ")" },
                           { id: "doubts", icon: "fa-question-circle", label: "AI Doubts (" + perfDoubtData.length + ")" },
                         ].map(v => (
@@ -5421,6 +5705,83 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                       })()}
 
                       {/* ═══ AI DOUBTS TAB ═══ */}
+                      {/* ═══ ONLINE TESTS TAB ═══ */}
+                      {perfTab === "online_tests" && (() => {
+                        // Is student ke test submissions fetch karo
+                        const studentSubs = otResults.filter(r => r.studentId === perfStudent?.id || r.studentName === perfStudent?.studentName);
+                        const totalTests = studentSubs.length;
+                        const avgPct = totalTests > 0 ? Math.round(studentSubs.reduce((s, r) => s + (r.percentage || 0), 0) / totalTests) : 0;
+                        const passed = studentSubs.filter(r => (r.percentage || 0) >= 40).length;
+                        return (
+                          <div>
+                            {/* Stats */}
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10, marginBottom: 16 }}>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#7C3AED" }}>{totalTests}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Tests Given</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#1349A8" }}>{avgPct}%</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Avg Score</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#16A34A" }}>{passed}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Passed</div></div>
+                              <div style={s.stat}><div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#DC2626" }}>{totalTests - passed}</div><div style={{ fontSize: ".72rem", color: "#6B7F99" }}>Failed</div></div>
+                            </div>
+
+                            {totalTests === 0 ? (
+                              <div style={{ ...s.card, textAlign: "center", padding: 40 }}>
+                                <i className="fas fa-laptop" style={{ fontSize: "2rem", color: "#B0C4DC", marginBottom: 10 }} />
+                                <p style={{ color: "#6B7F99", marginBottom: 4 }}>Student ne abhi koi online test nahi diya।</p>
+                                <p style={{ fontSize: ".78rem", color: "#B0C4DC" }}>Jab student test dega, yahan results dikhenge।</p>
+                              </div>
+                            ) : (
+                              <div style={{ ...s.card, padding: 0, overflow: "hidden" }}>
+                                <div style={{ padding: "12px 16px", borderBottom: "2px solid #E2EAF4", background: "#F8FAFD" }}>
+                                  <h3 style={{ fontSize: ".92rem", fontWeight: 700, margin: 0 }}>
+                                    <i className="fas fa-history" style={{ marginRight: 8, color: "#7C3AED" }} />Test History
+                                  </h3>
+                                </div>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".82rem" }}>
+                                  <thead>
+                                    <tr style={{ background: "#F0F4FA" }}>
+                                      <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                                      <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Test</th>
+                                      <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", color: "#16A34A" }}>Score</th>
+                                      <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", color: "#1349A8" }}>%</th>
+                                      <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Grade</th>
+                                      <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                                      <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Date</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {studentSubs.sort((a, b) => (b.submittedAt?.toDate?.() || 0) - (a.submittedAt?.toDate?.() || 0)).map((r, idx) => {
+                                      const pct = r.percentage || Math.round(((r.correct || 0) / (r.totalQuestions || 1)) * 100);
+                                      const grade = pct >= 90 ? "A+" : pct >= 75 ? "A" : pct >= 60 ? "B" : pct >= 40 ? "C" : "D";
+                                      const gc = pct >= 75 ? "#16A34A" : pct >= 50 ? "#D98D04" : "#DC2626";
+                                      const isPassed = pct >= 40;
+                                      // Test title dhundho
+                                      const testTitle = otList.find(t => t.id === r.testId)?.title || r.testTitle || "Unknown Test";
+                                      const testSubject = otList.find(t => t.id === r.testId)?.subject || r.subject || "";
+                                      const submDate = r.submittedAt?.toDate ? r.submittedAt.toDate().toLocaleDateString("en-IN") : "—";
+                                      return (
+                                        <tr key={r.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                                          <td style={{ padding: "10px 14px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                                          <td style={{ padding: "10px 14px" }}>
+                                            <div style={{ fontWeight: 600, fontSize: ".85rem" }}>{testTitle}</div>
+                                            {testSubject && <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>{testSubject}</div>}
+                                          </td>
+                                          <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A" }}>{r.correct || 0}/{r.totalQuestions || "—"}</td>
+                                          <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, color: gc, fontSize: ".92rem" }}>{pct}%</td>
+                                          <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 900, fontSize: "1rem", color: gc }}>{grade}</td>
+                                          <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                                            <span style={s.badge(isPassed ? "#16A34A" : "#DC2626", isPassed ? "#F0FDF4" : "#FEF2F2")}>{isPassed ? "Pass" : "Fail"}</span>
+                                          </td>
+                                          <td style={{ padding: "10px 14px", textAlign: "center", fontSize: ".75rem", color: "#6B7F99" }}>{submDate}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
                       {perfTab === "doubts" && (() => {
                         const dStats = getDoubtStats(perfDoubtData);
                         return (
@@ -5513,6 +5874,31 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
               <i className="fas fa-plus" /> Create Online Test
             </button>
           </div>
+
+          {/* ── View Toggle: Tests | Results ── */}
+          {!showOtForm && (
+            <div style={{ display: "flex", gap: 4, background: "#F0F4FA", borderRadius: 10, padding: 4, marginBottom: 16, width: "fit-content" }}>
+              <button onClick={() => setOtView("tests")} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: otView === "tests" ? "#fff" : "transparent", color: otView === "tests" ? "#7C3AED" : "#6B7F99", fontSize: ".82rem", fontWeight: 700, cursor: "pointer", boxShadow: otView === "tests" ? "0 2px 8px rgba(0,0,0,.08)" : "none", display: "flex", alignItems: "center", gap: 6 }}>
+                <i className="fas fa-laptop" style={{ fontSize: ".75rem" }} />Tests
+              </button>
+              <button onClick={() => {
+                setOtView("results");
+                setOtSelectedTest(null);
+                if (otResults.length === 0 && !otResultsLoading) {
+                  setOtResultsLoading(true);
+                  getDocs(collection(db, "test_submissions")).then(snap => {
+                    const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    arr.sort((a, b) => (b.submittedAt?.toDate?.() || 0) - (a.submittedAt?.toDate?.() || 0));
+                    setOtResults(arr);
+                    setOtResultsLoading(false);
+                  }).catch(() => setOtResultsLoading(false));
+                }
+              }} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: otView === "results" ? "#fff" : "transparent", color: otView === "results" ? "#7C3AED" : "#6B7F99", fontSize: ".82rem", fontWeight: 700, cursor: "pointer", boxShadow: otView === "results" ? "0 2px 8px rgba(0,0,0,.08)" : "none", display: "flex", alignItems: "center", gap: 6 }}>
+                <i className="fas fa-chart-bar" style={{ fontSize: ".75rem" }} />Results
+                {otResults.length > 0 && <span style={{ background: "#7C3AED", color: "#fff", borderRadius: 99, padding: "1px 6px", fontSize: ".6rem", fontWeight: 700 }}>{otResults.length}</span>}
+              </button>
+            </div>
+          )}
 
           {/* ═══ TEST CREATION FORM ═══ */}
           {showOtForm && <div style={{ ...s.card, border: "2px solid #7C3AED" }}>
@@ -5777,7 +6163,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           </>}
 
           {/* Tips */}
-          <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
+          {otView === "tests" && <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
             <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
             <div>
               <strong>Online Test Tips:</strong><br />
@@ -5788,7 +6174,170 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
               • Schedule date/time set karo — students ko us time pe test milega Student App me<br />
               • Questions review karo publish karne se pehle — galat questions hata sakte ho
             </div>
-          </div>
+          </div>}
+
+          {/* ═══ RESULTS SECTION ═══ */}
+          {!showOtForm && otView === "results" && (() => {
+            if (otResultsLoading) return (
+              <div style={{ textAlign: "center", padding: 40 }}>
+                <i className="fas fa-spinner fa-spin" style={{ fontSize: "1.5rem", color: "#7C3AED", marginBottom: 8 }} />
+                <p style={{ color: "#6B7F99" }}>Loading results...</p>
+              </div>
+            );
+
+            // Test select kiya hua hai — us test ke saare students ke results
+            if (otSelectedTest) {
+              const testSubs = otResults.filter(r => r.testId === otSelectedTest.id);
+              const avgScore = testSubs.length > 0
+                ? Math.round(testSubs.reduce((s, r) => s + (r.percentage || 0), 0) / testSubs.length)
+                : 0;
+              const passed = testSubs.filter(r => (r.percentage || 0) >= 40).length;
+              return (
+                <div>
+                  {/* Back button */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                    <button onClick={() => setOtSelectedTest(null)} style={{ ...s.btnGray, display: "flex", alignItems: "center", gap: 6 }}>
+                      <i className="fas fa-arrow-left" />Back
+                    </button>
+                    <div>
+                      <h3 style={{ fontSize: "1rem", fontWeight: 800, margin: 0 }}>{otSelectedTest.title}</h3>
+                      <p style={{ fontSize: ".72rem", color: "#6B7F99", margin: 0 }}>{otSelectedTest.subject} · {otSelectedTest.totalQuestions} Q · {testSubs.length} students submitted</p>
+                    </div>
+                  </div>
+
+                  {/* Stats */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+                    {[
+                      { n: testSubs.length, l: "Submitted", c: "#7C3AED", icon: "fa-users" },
+                      { n: avgScore + "%", l: "Avg Score", c: "#1349A8", icon: "fa-chart-line" },
+                      { n: passed, l: "Passed (≥40%)", c: "#16A34A", icon: "fa-check-circle" },
+                      { n: testSubs.length - passed, l: "Failed", c: "#DC2626", icon: "fa-times-circle" },
+                    ].map((x, i) => (
+                      <div key={i} style={s.stat}>
+                        <i className={`fas ${x.icon}`} style={{ color: x.c, fontSize: "1.1rem", marginBottom: 4 }} />
+                        <div style={{ fontSize: "1.4rem", fontWeight: 800, color: x.c }}>{x.n}</div>
+                        <div style={{ fontSize: ".65rem", color: "#6B7F99" }}>{x.l}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {testSubs.length === 0 ? (
+                    <div style={{ ...s.card, textAlign: "center", padding: 40 }}>
+                      <i className="fas fa-inbox" style={{ fontSize: "2rem", color: "#B0C4DC", marginBottom: 10 }} />
+                      <p style={{ color: "#6B7F99" }}>Kisi bhi student ne abhi tak ye test nahi diya।</p>
+                    </div>
+                  ) : (
+                    <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".82rem" }}>
+                        <thead>
+                          <tr style={{ background: "#F0F4FA" }}>
+                            <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>#</th>
+                            <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Student</th>
+                            <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", color: "#16A34A" }}>Score</th>
+                            <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0", color: "#1349A8" }}>%</th>
+                            <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Grade</th>
+                            <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
+                            <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Submitted</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {testSubs.sort((a, b) => (b.percentage || 0) - (a.percentage || 0)).map((r, idx) => {
+                            const pct = r.percentage || Math.round(((r.correct || 0) / (r.totalQuestions || 1)) * 100);
+                            const grade = pct >= 90 ? "A+" : pct >= 75 ? "A" : pct >= 60 ? "B" : pct >= 40 ? "C" : "D";
+                            const gradeColor = pct >= 75 ? "#16A34A" : pct >= 50 ? "#D98D04" : "#DC2626";
+                            const isPassed = pct >= 40;
+                            const submDate = r.submittedAt?.toDate ? r.submittedAt.toDate().toLocaleDateString("en-IN") : r.submittedAt || "—";
+                            return (
+                              <tr key={r.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
+                                <td style={{ padding: "10px 14px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
+                                <td style={{ padding: "10px 14px" }}>
+                                  <div style={{ fontWeight: 600 }}>{r.studentName || "Unknown"}</div>
+                                  <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>{r.studentClass || ""}</div>
+                                </td>
+                                <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A" }}>{r.correct || 0} / {r.totalQuestions || otSelectedTest.totalQuestions}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, color: gradeColor, fontSize: ".92rem" }}>{pct}%</td>
+                                <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                                  <span style={{ fontWeight: 900, fontSize: "1rem", color: gradeColor }}>{grade}</span>
+                                </td>
+                                <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                                  <span style={s.badge(isPassed ? "#16A34A" : "#DC2626", isPassed ? "#F0FDF4" : "#FEF2F2")}>{isPassed ? "Pass" : "Fail"}</span>
+                                </td>
+                                <td style={{ padding: "10px 14px", textAlign: "center", fontSize: ".75rem", color: "#6B7F99" }}>{submDate}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // All tests ka overview — har test ke liye kitne students ne diya
+            const testsWithSubs = otList.map(t => ({
+              ...t,
+              submissions: otResults.filter(r => r.testId === t.id),
+              avgPct: (() => {
+                const subs = otResults.filter(r => r.testId === t.id);
+                return subs.length > 0 ? Math.round(subs.reduce((s, r) => s + (r.percentage || 0), 0) / subs.length) : null;
+              })()
+            }));
+
+            return (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <h3 style={{ fontSize: ".95rem", fontWeight: 800, margin: 0 }}>
+                    <i className="fas fa-chart-bar" style={{ marginRight: 8, color: "#7C3AED" }} />Test-wise Results
+                  </h3>
+                  <button onClick={() => {
+                    setOtResultsLoading(true);
+                    getDocs(collection(db, "test_submissions")).then(snap => {
+                      const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                      arr.sort((a, b) => (b.submittedAt?.toDate?.() || 0) - (a.submittedAt?.toDate?.() || 0));
+                      setOtResults(arr);
+                      setOtResultsLoading(false);
+                    }).catch(() => setOtResultsLoading(false));
+                  }} style={{ ...s.btnO, display: "flex", alignItems: "center", gap: 6 }}>
+                    <i className="fas fa-sync" />Refresh
+                  </button>
+                </div>
+
+                {testsWithSubs.length === 0 ? (
+                  <div style={{ ...s.card, textAlign: "center", padding: 40 }}>
+                    <i className="fas fa-chart-bar" style={{ fontSize: "2rem", color: "#B0C4DC", marginBottom: 10 }} />
+                    <p style={{ color: "#6B7F99" }}>Koi test create nahi hua abhi।</p>
+                  </div>
+                ) : testsWithSubs.map(t => (
+                  <div key={t.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 14, cursor: "pointer", transition: "all .2s" }}
+                    onClick={() => setOtSelectedTest(t)}>
+                    <div style={{ width: 48, height: 48, borderRadius: 12, background: "#FAF5FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <i className="fas fa-file-alt" style={{ color: "#7C3AED", fontSize: "1.1rem" }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: ".92rem", marginBottom: 3 }}>{t.title}</div>
+                      <div style={{ fontSize: ".75rem", color: "#6B7F99", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <span><i className="fas fa-book" style={{ marginRight: 3 }} />{t.subject}</span>
+                        <span><i className="fas fa-question-circle" style={{ marginRight: 3 }} />{t.totalQuestions} Q</span>
+                        <span><i className="fas fa-users" style={{ marginRight: 3 }} />{t.submissions.length} submitted</span>
+                        {t.avgPct !== null && <span style={{ color: t.avgPct >= 60 ? "#16A34A" : t.avgPct >= 40 ? "#D98D04" : "#DC2626", fontWeight: 700 }}>
+                          <i className="fas fa-chart-line" style={{ marginRight: 3 }} />Avg: {t.avgPct}%
+                        </span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                      {t.submissions.length > 0 ? (
+                        <span style={s.badge("#7C3AED", "#FAF5FF")}>{t.submissions.length} Results</span>
+                      ) : (
+                        <span style={s.badge("#6B7F99", "#F0F4FA")}>No submissions</span>
+                      )}
+                      <i className="fas fa-chevron-right" style={{ color: "#B0C4DC", fontSize: ".7rem" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </>}
 
 
@@ -5956,10 +6505,12 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           {/* Fee Stats */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
             {(() => {
+              // inst1+inst2+inst3 ka total = actual paid amount
+              const calcPaid = (st) => Number(st.inst1Amount || 0) + Number(st.inst2Amount || 0) + Number(st.inst3Amount || 0);
               const totalFees = students.reduce((sum, st) => sum + Number(st.totalFee || 0), 0);
-              const totalPaid = students.reduce((sum, st) => sum + Number(st.enrollmentFeePaid || 0), 0);
+              const totalPaid = students.reduce((sum, st) => sum + calcPaid(st), 0);
               const totalDue = totalFees - totalPaid;
-              const fullyPaid = students.filter(st => st.totalFee && Number(st.enrollmentFeePaid || 0) >= Number(st.totalFee)).length;
+              const fullyPaid = students.filter(st => st.totalFee && calcPaid(st) >= Number(st.totalFee)).length;
               return [
                 { n: `₹${totalFees.toLocaleString("en-IN")}`, l: "Total Fees", c: "#1349A8", icon: "fa-money-bill-wave" },
                 { n: `₹${totalPaid.toLocaleString("en-IN")}`, l: "Total Collected", c: "#16A34A", icon: "fa-check-circle" },
@@ -6010,6 +6561,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                   <th style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Student</th>
                   <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Class</th>
                   <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Total Fee</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#7C3AED", borderBottom: "2px solid #D4DEF0" }}>Enroll. Fee</th>
                   <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A", borderBottom: "2px solid #D4DEF0" }}>Paid</th>
                   <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#DC2626", borderBottom: "2px solid #D4DEF0" }}>Due</th>
                   <th style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, borderBottom: "2px solid #D4DEF0" }}>Status</th>
@@ -6022,38 +6574,69 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                   if (feeClassFilter !== "all") feeList = filterByBatch(feeList, feeClassFilter);
                   if (feeSearch.trim()) { const q = feeSearch.toLowerCase(); feeList = feeList.filter(x => x.studentName?.toLowerCase().includes(q)); }
 
-                  if (feeList.length === 0) return <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No students found</td></tr>;
+                  if (feeList.length === 0) return <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#6B7F99" }}>No students found</td></tr>;
 
                   return feeList.map((st, idx) => {
                     const total = Number(st.totalFee || 0);
-                    const paid = Number(st.enrollmentFeePaid || 0);
-                    const due = Math.max(0, total - paid);
-                    const isFullyPaid = total > 0 && paid >= total;
+                    // Installment-wise actual paid amount
+                    const inst1 = Number(st.inst1Amount || 0);
+                    const inst2 = Number(st.inst2Amount || 0);
+                    const inst3 = Number(st.inst3Amount || 0);
+                    const paidTotal = inst1 + inst2 + inst3;
+                    const due = Math.max(0, total - paidTotal);
+                    const isFullyPaid = total > 0 && paidTotal >= total;
+                    const enrollStatus = st.enrollmentFeePaid; // "paid" | "not_paid" | undefined
+
+                    // Kitne installments complete hain
+                    const instsDone = [inst1, inst2, inst3].filter(x => x > 0).length;
+
                     return (
                       <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
                         <td style={{ padding: "10px 14px", color: "#6B7F99", fontWeight: 600 }}>{idx + 1}</td>
                         <td style={{ padding: "10px 14px" }}>
                           <div style={{ fontWeight: 600 }}>{st.studentName}</div>
                           <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>{st.studentPhone}</div>
+                          {instsDone > 0 && (
+                            <div style={{ fontSize: ".68rem", color: "#1349A8", marginTop: 2 }}>
+                              {[inst1,inst2,inst3].map((amt, i) => amt > 0 ? (
+                                <span key={i} style={{ marginRight: 6, background: "#EFF6FF", borderRadius: 4, padding: "1px 5px" }}>
+                                  Inst{i+1}: ₹{amt.toLocaleString("en-IN")}
+                                </span>
+                              ) : null)}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
                         <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 600 }}>{total > 0 ? `₹${total.toLocaleString("en-IN")}` : "—"}</td>
-                        <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A" }}>{paid > 0 ? `₹${paid.toLocaleString("en-IN")}` : "—"}</td>
+
+                        {/* Enrollment Fee Status column */}
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {enrollStatus === "paid"
+                            ? <span style={{ ...s.badge("#16A34A", "#F0FDF4"), fontSize: ".68rem" }}><i className="fas fa-check" style={{ marginRight: 3 }} />Paid</span>
+                            : enrollStatus === "not_paid"
+                            ? <span style={{ ...s.badge("#DC2626", "#FEF2F2"), fontSize: ".68rem" }}><i className="fas fa-times" style={{ marginRight: 3 }} />Not Paid</span>
+                            : <span style={{ ...s.badge("#6B7F99", "#F0F4FA"), fontSize: ".68rem" }}>—</span>}
+                        </td>
+
+                        <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: "#16A34A" }}>{paidTotal > 0 ? `₹${paidTotal.toLocaleString("en-IN")}` : "—"}</td>
                         <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700, color: due > 0 ? "#DC2626" : "#16A34A" }}>{total > 0 ? `₹${due.toLocaleString("en-IN")}` : "—"}</td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
                           {total === 0 ? <span style={s.badge("#6B7F99", "#F0F4FA")}>No Fee</span>
-                            : isFullyPaid ? <span style={s.badge("#16A34A", "#F0FDF4")}>Paid</span>
+                            : isFullyPaid ? <span style={s.badge("#16A34A", "#F0FDF4")}>Fully Paid</span>
+                            : paidTotal > 0 ? <span style={s.badge("#D98D04", "#FFFBEB")}>Partial</span>
                             : <span style={s.badge("#DC2626", "#FEF2F2")}>Due</span>}
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                          <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                            {!isFullyPaid && total > 0 && (
-                              <button onClick={() => { setShowFeePayment(st.id); setFeePaymentForm({ date: new Date().toISOString().split("T")[0] }); }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
+                          <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap" }}>
+                            {total > 0 && (
+                              <button onClick={() => { setShowFeePayment(st.id); setFeePaymentForm({ date: new Date().toISOString().split("T")[0], installmentNo: String(instsDone + 1 <= 3 ? instsDone + 1 : 3) }); }}
+                                style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#16A34A", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
                                 <i className="fas fa-plus" style={{ marginRight: 3 }} />Pay
                               </button>
                             )}
                             {total > 0 && (
-                              <button onClick={() => setShowReceipt(st.id)} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
+                              <button onClick={() => { setShowReceipt(st.id); setFeePaymentForm({}); }}
+                                style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".7rem", fontWeight: 700, cursor: "pointer" }}>
                                 <i className="fas fa-receipt" style={{ marginRight: 3 }} />Receipt
                               </button>
                             )}
@@ -6067,37 +6650,206 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             </table>
           </div>
 
-          {/* Fee Payment Modal */}
+          {/* Fee Payment Modal — Full Installment System */}
           {showFeePayment && (() => {
             const st = students.find(x => x.id === showFeePayment);
             if (!st) return null;
-            const due = Math.max(0, Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0));
+            const totalFee = Number(st.totalFee || 0);
+            const inst1 = Number(st.inst1Amount || 0);
+            const inst2 = Number(st.inst2Amount || 0);
+            const inst3 = Number(st.inst3Amount || 0);
+            const alreadyPaid = inst1 + inst2 + inst3;
+            const due = Math.max(0, totalFee - alreadyPaid);
+            const instNo = feePaymentForm.installmentNo || "1";
+
+            // Student ke existing subjects
+            const subjects = [1,2,3,4,5,6].map(n => ({ n, name: st[`subject${n}`] })).filter(x => x.name);
+
+            // Auto distribute function
+            const autoDistribute = () => {
+              const amt = Number(feePaymentForm.instAmount || 0);
+              if (!amt || !subjects.length) return;
+              const each = Math.floor(amt / subjects.length);
+              const rem = amt - (each * subjects.length);
+              const newSubFees = {};
+              subjects.forEach((sub, i) => { newSubFees[`sf${sub.n}`] = i === 0 ? each + rem : each; });
+              setFeePaymentForm(prev => ({ ...prev, subjectFees: newSubFees }));
+            };
+
+            // Save installment to Firebase + update student doc
+            const saveInstallment = async () => {
+              const amt = Number(feePaymentForm.instAmount || 0);
+              if (!amt || amt <= 0) { alert("Amount required"); return; }
+              setSaving(true);
+              try {
+                const stRef = doc(db, "students", showFeePayment);
+                const instAmtKey = `inst${instNo}Amount`;
+                const instDateKey = `inst${instNo}Date`;
+                const subFees = feePaymentForm.subjectFees || {};
+
+                // Student doc update karo — installment + subject fees
+                const updateData = {
+                  [instAmtKey]: amt,
+                  [instDateKey]: feePaymentForm.date || new Date().toISOString().split("T")[0],
+                  updatedAt: serverTimestamp(),
+                };
+                // Subject fees bhi student doc me save karo (installment ke according key)
+                subjects.forEach(sub => {
+                  const feeVal = subFees[`sf${sub.n}`];
+                  if (feeVal !== undefined) {
+                    // 1st installment = fee1..fee6, 2nd = fee2_sub1..fee2_sub6, 3rd = fee3_sub1..fee3_sub6
+                    const feeKey = instNo === "1" ? `fee${sub.n}` : `fee${instNo}_sub${sub.n}`;
+                    updateData[feeKey] = Number(feeVal);
+                  }
+                });
+                if (feePaymentForm.paymentMode) updateData.paymentMode = feePaymentForm.paymentMode;
+                if (feePaymentForm.note) updateData[`inst${instNo}Note`] = feePaymentForm.note;
+
+                await updateDoc(stRef, updateData);
+
+                // fee_payments collection me history save karo
+                await addDoc(collection(db, "fee_payments"), {
+                  studentId: showFeePayment,
+                  studentName: st.studentName,
+                  class: st.class,
+                  installmentNo: instNo,
+                  amount: amt,
+                  date: feePaymentForm.date || new Date().toISOString().split("T")[0],
+                  paymentMode: feePaymentForm.paymentMode || "cash",
+                  note: feePaymentForm.note || "",
+                  subjectFees: subFees,
+                  createdAt: serverTimestamp(),
+                });
+
+                setShowFeePayment(null);
+                setFeePaymentForm({});
+                setMsg("✅ Installment saved!");
+                setTimeout(() => setMsg(""), 3000);
+              } catch (e) {
+                alert("Save error: " + e.message);
+              }
+              setSaving(false);
+            };
+
             return (
-              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setShowFeePayment(null)}>
-                <div style={{ background: "#fff", borderRadius: 16, padding: 28, maxWidth: 420, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.15)" }} onClick={e => e.stopPropagation()}>
-                  <h3 style={{ fontSize: "1.05rem", fontWeight: 800, marginBottom: 4 }}>Record Fee Payment</h3>
-                  <p style={{ fontSize: ".82rem", color: "#6B7F99", marginBottom: 16 }}>{st.studentName} · Class {st.class} · Due: <strong style={{ color: "#DC2626" }}>₹{due.toLocaleString("en-IN")}</strong></p>
-                  <div><label style={s.label}>Amount (₹) *</label><input style={s.input} type="number" placeholder={`Max: ${due}`} value={feePaymentForm.amount || ""} onChange={e => setFeePaymentForm({ ...feePaymentForm, amount: e.target.value })} /></div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div><label style={s.label}>Payment Mode</label>
-                      <select style={s.input} value={feePaymentForm.paymentMode || "cash"} onChange={e => setFeePaymentForm({ ...feePaymentForm, paymentMode: e.target.value })}>
-                        <option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank Transfer</option><option value="other">Other</option>
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "20px 16px", overflowY: "auto" }} onClick={() => { setShowFeePayment(null); setFeePaymentForm({}); }}>
+                <div style={{ background: "#fff", borderRadius: 16, padding: 24, maxWidth: 520, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.2)", marginTop: 20 }} onClick={e => e.stopPropagation()}>
+
+                  {/* Header */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 10, background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <i className="fas fa-layer-group" style={{ color: "#1349A8" }} />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: "1rem", fontWeight: 800, margin: 0 }}>Fee Payment — {st.studentName}</h3>
+                      <p style={{ fontSize: ".75rem", color: "#6B7F99", margin: 0 }}>Class {st.class} · Total: ₹{totalFee.toLocaleString("en-IN")} · Paid: <span style={{ color: "#16A34A", fontWeight: 700 }}>₹{alreadyPaid.toLocaleString("en-IN")}</span> · Due: <span style={{ color: "#DC2626", fontWeight: 700 }}>₹{due.toLocaleString("en-IN")}</span></p>
+                    </div>
+                  </div>
+
+                  {/* Existing installments summary */}
+                  {(inst1 > 0 || inst2 > 0 || inst3 > 0) && (
+                    <div style={{ background: "#F0FDF4", borderRadius: 8, padding: 10, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {[{n:"1",amt:inst1,date:st.inst1Date},{n:"2",amt:inst2,date:st.inst2Date},{n:"3",amt:inst3,date:st.inst3Date}].map(x => x.amt > 0 ? (
+                        <div key={x.n} style={{ fontSize: ".72rem", color: "#166534", background: "#DCFCE7", borderRadius: 6, padding: "4px 10px" }}>
+                          <strong>Inst {x.n}:</strong> ₹{x.amt.toLocaleString("en-IN")} {x.date ? `(${x.date})` : ""}
+                        </div>
+                      ) : null)}
+                    </div>
+                  )}
+
+                  {/* Installment selector — only show available ones + create new */}
+                  <div style={{ marginBottom: 14 }}>
+                    <label style={{ ...s.label, marginBottom: 6 }}>Installment Select / Create</label>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {["1","2","3"].map(n => {
+                        const existingAmt = n === "1" ? inst1 : n === "2" ? inst2 : inst3;
+                        const isNew = existingAmt === 0;
+                        return (
+                          <button key={n} type="button"
+                            onClick={() => setFeePaymentForm(prev => ({ ...prev, installmentNo: n, instAmount: existingAmt > 0 ? String(existingAmt) : "", subjectFees: {} }))}
+                            style={{ padding: "8px 14px", borderRadius: 8, border: `2px solid ${instNo === n ? "#1349A8" : isNew ? "#86EFAC" : "#D4DEF0"}`, background: instNo === n ? "#EFF6FF" : isNew ? "#F0FDF4" : "#F8FAFD", color: instNo === n ? "#1349A8" : isNew ? "#16A34A" : "#6B7F99", fontWeight: 700, fontSize: ".78rem", cursor: "pointer" }}>
+                            {isNew ? <><i className="fas fa-plus" style={{ marginRight: 4 }} />New {n}{n==="1"?"st":n==="2"?"nd":"rd"} Inst</> : <>{n}{n==="1"?"st":n==="2"?"nd":"rd"} Inst — ₹{existingAmt.toLocaleString("en-IN")}</>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {inst1 > 0 && inst2 === 0 && instNo === "1" && (
+                      <p style={{ fontSize: ".7rem", color: "#D98D04", marginTop: 6 }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />Tip: 2nd Inst create karne ke liye "New 2nd Inst" button dabao</p>
+                    )}
+                  </div>
+
+                  {/* Amount + Date */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                    <div>
+                      <label style={s.label}>{instNo === "1" ? "1st" : instNo === "2" ? "2nd" : "3rd"} Installment Amount (₹) *</label>
+                      <input style={{ ...s.input, borderColor: "#86EFAC" }} type="number" placeholder="e.g. 8000"
+                        value={feePaymentForm.instAmount || ""}
+                        onChange={e => setFeePaymentForm(prev => ({ ...prev, instAmount: e.target.value, subjectFees: {} }))} />
+                    </div>
+                    <div>
+                      <label style={s.label}>Payment Date</label>
+                      <input style={s.input} type="date" value={feePaymentForm.date || new Date().toISOString().split("T")[0]}
+                        onChange={e => setFeePaymentForm(prev => ({ ...prev, date: e.target.value }))} />
+                    </div>
+                  </div>
+
+                  {/* Subject Distribution */}
+                  {subjects.length > 0 && (
+                    <div style={{ background: "#F0FDF4", borderRadius: 10, padding: 12, border: "1px solid #86EFAC", marginBottom: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontSize: ".78rem", fontWeight: 700, color: "#166534" }}><i className="fas fa-list" style={{ marginRight: 5 }} />Subject-wise Fee Distribution</span>
+                        <button type="button" onClick={autoDistribute}
+                          style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: ".72rem", fontWeight: 700, cursor: "pointer" }}>
+                          <i className="fas fa-magic" style={{ marginRight: 4 }} />Auto Distribute
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                        {subjects.map(sub => {
+                          const val = feePaymentForm.subjectFees?.[`sf${sub.n}`] ?? "";
+                          return (
+                            <div key={sub.n}>
+                              <label style={{ fontSize: ".7rem", fontWeight: 600, color: "#166534", display: "block", marginBottom: 3 }}>{sub.name}</label>
+                              <input style={{ ...s.input, borderColor: "#86EFAC", padding: "6px 8px", fontSize: ".8rem" }} type="number" placeholder="0" value={val}
+                                onChange={e => {
+                                  const newFees = { ...(feePaymentForm.subjectFees || {}), [`sf${sub.n}`]: Number(e.target.value) };
+                                  const tot = Object.values(newFees).reduce((a, b) => a + Number(b || 0), 0);
+                                  setFeePaymentForm(prev => ({ ...prev, subjectFees: newFees, instAmount: String(tot) }));
+                                }} />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Payment Mode + Note */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                    <div>
+                      <label style={s.label}>Payment Mode</label>
+                      <select style={s.input} value={feePaymentForm.paymentMode || "cash"} onChange={e => setFeePaymentForm(prev => ({ ...prev, paymentMode: e.target.value }))}>
+                        <option value="cash">Cash</option>
+                        <option value="upi">UPI</option>
+                        <option value="bank">Bank Transfer</option>
+                        <option value="other">Other</option>
                       </select>
                     </div>
-                    <div><label style={s.label}>Date</label><input style={s.input} type="date" value={feePaymentForm.date || ""} onChange={e => setFeePaymentForm({ ...feePaymentForm, date: e.target.value })} /></div>
+                    <div>
+                      <label style={s.label}>Note (optional)</label>
+                      <input style={s.input} placeholder="e.g. Remaining fee" value={feePaymentForm.note || ""} onChange={e => setFeePaymentForm(prev => ({ ...prev, note: e.target.value }))} />
+                    </div>
                   </div>
-                  <div><label style={s.label}>Note (optional)</label><input style={s.input} placeholder="e.g. 2nd installment" value={feePaymentForm.note || ""} onChange={e => setFeePaymentForm({ ...feePaymentForm, note: e.target.value })} /></div>
+
+                  {/* Save + Cancel */}
                   <div style={{ display: "flex", gap: 10 }}>
-                    <button onClick={() => addFeePayment(showFeePayment)} disabled={saving} style={{ ...s.btnP, flex: 1 }}>
-                      <i className="fas fa-check" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Record Payment"}
+                    <button onClick={saveInstallment} disabled={saving} style={{ ...s.btnP, flex: 1 }}>
+                      <i className="fas fa-check" style={{ marginRight: 6 }} />{saving ? "Saving..." : `Save ${instNo === "1" ? "1st" : instNo === "2" ? "2nd" : "3rd"} Installment`}
                     </button>
-                    <button onClick={() => setShowFeePayment(null)} style={s.btnGray}>Cancel</button>
+                    <button onClick={() => { setShowFeePayment(null); setFeePaymentForm({}); }} style={s.btnGray}>Cancel</button>
                   </div>
                 </div>
               </div>
             );
           })()}
-
           {/* Tips */}
           <div style={{ marginTop: 16, background: "#FFFBEB", borderRadius: 12, padding: 16, border: "1px solid #FDE68A", fontSize: ".82rem", color: "#78350F", display: "flex", alignItems: "flex-start", gap: 10 }}>
             <i className="fas fa-lightbulb" style={{ marginTop: 2, flexShrink: 0, color: "#D98D04" }} />
@@ -6112,83 +6864,198 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             </div>
           </div>
 
-          {/* ═══ FEE RECEIPT MODAL ═══ */}
+ {/* ═══ FEE RECEIPT MODAL ═══ */}
           {showReceipt && (() => {
             const st = students.find(x => x.id === showReceipt);
             if (!st) return null;
+
+            // ── Installment data ──
+            const inst1 = Number(st.inst1Amount || 0);
+            const inst2 = Number(st.inst2Amount || 0);
+            const inst3 = Number(st.inst3Amount || 0);
+            const totalPaid = inst1 + inst2 + inst3;
             const total = Number(st.totalFee || 0);
-            const paid = Number(st.enrollmentFeePaid || 0);
-            const due = Math.max(0, total - paid);
-            const subjects = [
-              { name: st.subject1 || "PHYSICS", fee: st.fee1 || "" },
-              { name: st.subject2 || "CHEMISTRY", fee: st.fee2 || "" },
-              { name: st.subject3 || "MATHS/BIO", fee: st.fee3 || "" },
-              { name: st.subject4 || "SCIENCE", fee: st.fee4 || "" },
-              { name: st.subject5 || "ENGLISH", fee: st.fee5 || "" },
-              { name: st.subject6 || "SOCIAL STUDY", fee: st.fee6 || "" },
-            ];
+            const due = Math.max(0, total - totalPaid);
+
+            // Selected installment (from feePaymentForm.receiptInst)
+            const selInst = feePaymentForm?.receiptInst || "all";
+
+            // Installment ke according date aur mode
+            const getInstDate = (n) => st[`inst${n}Date`] || new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+            const getInstMode = (n) => st[`inst${n}Mode`] || st.paymentMode || "Cash";
+            const getInstNote = (n) => st[`inst${n}Note`] || "";
+
+            const receiptDate = selInst === "all"
+              ? new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })
+              : (() => { const d = st[`inst${selInst}Date`]; return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }); })();
+
+            const receiptAmount = selInst === "all" ? totalPaid
+              : selInst === "1" ? inst1
+              : selInst === "2" ? inst2
+              : inst3;
+
+            const receiptMode = selInst === "all" ? (st.paymentMode || "Cash") : getInstMode(selInst);
+            const instLabel = selInst === "1" ? "1st Installment" : selInst === "2" ? "2nd Installment" : selInst === "3" ? "3rd Installment" : "Full Receipt";
+
+            // Subject fees — installment ke according
+            const getSubFee = (n) => {
+              if (selInst === "2") return st[`fee2_sub${n}`] || "";
+              if (selInst === "3") return st[`fee3_sub${n}`] || "";
+              if (selInst === "all") {
+                // Saare installments ki fees combine karo
+                const f1 = Number(st[`fee${n}`] || 0);
+                const f2 = Number(st[`fee2_sub${n}`] || 0);
+                const f3 = Number(st[`fee3_sub${n}`] || 0);
+                const combined = f1 + f2 + f3;
+                return combined > 0 ? String(combined) : "";
+              }
+              return st[`fee${n}`] || "";
+            };
+            const subjects = [1,2,3,4,5,6]
+              .map(n => ({ name: st[`subject${n}`], fee: getSubFee(n) }))
+              .filter(x => x.name);
             const subjectTotal = subjects.reduce((s, sub) => s + Number(sub.fee || 0), 0);
-            // Number to words (Hindi)
+            // All/Full me totalPaid use karo, individual installment me subjectTotal
+            const displayTotal = selInst === "all" ? totalPaid : (subjectTotal > 0 ? subjectTotal : receiptAmount);
+
+            // Number to words
             const numToWords = (n) => {
-              if (!n || n === 0) return "";
-              const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
-              const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+              if (!n || n === 0) return "Zero";
+              const ones = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+              const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
               if (n < 20) return ones[n];
-              if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "");
-              if (n < 1000) return ones[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " " + numToWords(n % 100) : "");
-              if (n < 100000) return numToWords(Math.floor(n / 1000)) + " Thousand" + (n % 1000 ? " " + numToWords(n % 1000) : "");
-              if (n < 10000000) return numToWords(Math.floor(n / 100000)) + " Lakh" + (n % 100000 ? " " + numToWords(n % 100000) : "");
+              if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? " "+ones[n%10] : "");
+              if (n < 1000) return ones[Math.floor(n/100)] + " Hundred" + (n%100 ? " "+numToWords(n%100) : "");
+              if (n < 100000) return numToWords(Math.floor(n/1000)) + " Thousand" + (n%1000 ? " "+numToWords(n%1000) : "");
+              if (n < 10000000) return numToWords(Math.floor(n/100000)) + " Lakh" + (n%100000 ? " "+numToWords(n%100000) : "");
               return String(n);
             };
 
+
+            // ── PRINT FUNCTION ──
             const printReceipt = (size) => {
-              const el = document.getElementById("pid-receipt");
-              if (!el) return;
-              const printWin = window.open("", "_blank", "width=600,height=800");
-              const scale = size === "small" ? "60%" : size === "medium" ? "80%" : "100%";
-              printWin.document.write(`<html><head><title>PID Receipt — ${st.studentName}</title><style>
-                @page { size: ${size === "small" ? "80mm 150mm" : size === "medium" ? "A5" : "A4"}; margin: ${size === "small" ? "2mm" : "10mm"}; }
-                body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; justify-content: center; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                .receipt-wrap { width: ${size === "small" ? "76mm" : size === "medium" ? "380px" : "460px"}; border: 3px solid #B91C1C !important; border-radius: 4px; margin: 0 auto; height: fit-content !important; display: inline-block; }
-                body { display: block !important; text-align: center; }
-                .receipt-wrap > div { border: none !important; }
-                .receipt-wrap table { page-break-inside: avoid; }
-                table { border: 2px solid #B91C1C !important; border-collapse: collapse !important; }
-                th, td { border: 1px solid #B91C1C !important; }
-                * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
-                @media print {
-                  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
-                  .receipt-wrap { border: 3px solid #B91C1C !important; }
-                  table { border: 2px solid #B91C1C !important; }
-                  th, td { border: 1px solid #B91C1C !important; }
-                }
-              </style></head><body><div class="receipt-wrap">${el.innerHTML}</div></body></html>`);
-              printWin.document.close();
-              setTimeout(() => { printWin.print(); }, 500);
+              const isS = size === "small";
+              const isM = size === "medium";
+              const pageSize = isS ? "80mm 150mm" : isM ? "A5 portrait" : "A4 portrait";
+              const mg = isS ? "3mm" : isM ? "6mm" : "8mm";
+              const fs = isS ? "9px" : isM ? "11px" : "13px";
+              const titleFs = isS ? "20px" : isM ? "26px" : "32px";
+              const pad = isS ? "6px 10px" : "10px 16px";
+              const tdPad = isS ? "3px 6px" : "5px 10px";
+              const subRows = subjects.map(function(sub, i) {
+                return "<tr><td style='border:1px solid #B91C1C;padding:" + tdPad + ";font-weight:700'>" + (i+1) + ".</td>"
+                  + "<td style='border:1px solid #B91C1C;padding:" + tdPad + ";font-weight:700'>" + sub.name.toUpperCase() + "</td>"
+                  + "<td style='border:1px solid #B91C1C;padding:" + tdPad + ";text-align:right'>" + (sub.fee ? "&#8377;" + Number(sub.fee).toLocaleString("en-IN") : "") + "</td></tr>";
+              }).join("");
+              const html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                + "<style>"
+                + "*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important;margin:0;padding:0;}"
+                + "@page{size:" + pageSize + ";margin:" + mg + ";}"
+                + "html,body{width:100%;background:#fff;font-family:Arial,sans-serif;font-size:" + fs + ";color:#333;}"
+                + ".rc{width:100%;border:3px solid #B91C1C;border-radius:4px;}"
+                + ".hd{text-align:center;padding:" + pad + ";border-bottom:2px solid #B91C1C;}"
+                + ".hd-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px;}"
+                + ".reg{font-size:" + (isS?"7px":"9px") + ";border:1px solid #333;padding:2px 6px;background:#FEF3C7;text-align:center;line-height:1.4;}"
+                + ".ib{font-size:" + (isS?"7px":"9px") + ";border:1px solid #B91C1C;padding:2px 8px;background:#FEF2F2;color:#B91C1C;font-weight:700;}"
+                + ".tit{font-size:" + titleFs + ";font-weight:900;color:#B91C1C;letter-spacing:2px;font-family:Impact,Arial,sans-serif;line-height:1.1;margin:2px 0;}"
+                + ".addr{font-size:" + (isS?"9px":"12px") + ";font-weight:700;}"
+                + ".ph{display:inline-block;background:#B91C1C;color:#fff;padding:2px 14px;border-radius:4px;font-size:" + (isS?"8px":"11px") + ";font-weight:700;margin-top:3px;}"
+                + ".si{padding:" + pad + ";font-size:" + fs + ";}"
+                + ".sr{display:flex;justify-content:space-between;margin-bottom:5px;}"
+                + ".dv{border-bottom:1px dotted #999;display:inline-block;min-width:" + (isS?"100px":"200px") + ";}"
+                + ".cr{display:flex;gap:16px;margin-bottom:4px;}"
+                + ".pb{background:#F0FDF4;border-top:1px solid #86EFAC;border-bottom:1px solid #86EFAC;padding:" + (isS?"4px 10px":"6px 16px") + ";font-size:" + (isS?"8px":"10px") + ";display:flex;gap:16px;flex-wrap:wrap;}"
+                + ".tw{padding:0 " + (isS?"10px":"16px") + " 10px;}"
+                + "table{width:100%;border-collapse:collapse;border:2px solid #B91C1C;margin-top:8px;}"
+                + "th,td{border:1px solid #B91C1C;}"
+                + ".th{background:#FEF2F2;font-weight:700;text-align:left;padding:" + tdPad + ";}"
+                + ".thr{text-align:right;}"
+                + ".tot{background:#FEF2F2;}"
+                + ".sg{padding:" + pad + ";display:flex;justify-content:space-between;align-items:flex-end;}"
+                + "@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}html,body{width:100%;}}"
+                + "</style></head><body>"
+                + "<div class='rc'>"
+                + "<div class='hd'><div class='hd-top'>"
+                + "<span style='font-size:" + (isS?"7px":"9px") + ";color:#555'>&#2346;&#2335;&#2375;&#2354; &#2358;&#2367;&#2325;&#2381;&#2359;&#2339; &#2319;&#2357;&#2306; &#2360;&#2375;&#2357;&#2366; &#2360;&#2350;&#2367;&#2340;&#2367; &#2342;&#2381;&#2357;&#2366;&#2352;&#2366; &#2360;&#2306;&#2330;&#2366;&#2354;&#2367;&#2340;...</span>"
+                + "<div style='display:flex;gap:4px'><span class='ib'>" + instLabel + "</span><span class='reg'>&#2346;&#2306;&#2332;&#2368;&#2351;&#2344; &#2325;&#2381;&#2352;&#2350;&#2366;&#2306;&#2325;<br/><strong>122201880553</strong></span></div>"
+                + "</div>"
+                + "<div class='tit'>PATEL INSTITUTE</div>"
+                + "<div class='addr'>Matiya Road, Near Saket Dham, Dongargaon</div>"
+                + "<span class='ph'>Mo. 8319002877, 7470412110</span>"
+                + "</div>"
+                + "<div class='si'>"
+                + "<div class='sr'><span><strong>S.No.:</strong> " + (st.formNo||"&mdash;") + "</span><span><strong>Date:</strong> " + receiptDate + "</span></div>"
+                + "<div style='margin-bottom:4px'><strong>Student Name:</strong> <span class='dv'>" + (st.studentName||"") + "</span></div>"
+                + "<div style='margin-bottom:4px'><strong>Father Name:</strong> <span class='dv'>" + (st.fatherName||"") + "</span></div>"
+                + "<div style='margin-bottom:4px'><strong>Address:</strong> <span class='dv'>" + (st.permanentAddress||"") + "</span></div>"
+                + "<div class='cr'><span><strong>Class:</strong> " + (st.class||"") + "</span><span><strong>Medium:</strong> " + (st.medium||"") + "</span><span><strong>Board:</strong> " + (st.board||"") + "</span></div>"
+                + "</div>"
+                + "<div class='pb'>"
+                + "<span><strong>Mode:</strong> " + receiptMode + "</span>"
+                + "<span><strong>Date:</strong> " + receiptDate + "</span>"
+                + (total > 0 ? "<span><strong>Total:</strong> &#8377;" + total.toLocaleString("en-IN") + " | <strong>Due:</strong> <span style='color:" + (due>0?"#DC2626":"#16A34A") + "'>&#8377;" + due.toLocaleString("en-IN") + "</span></span>" : "")
+                + "</div>"
+                + "<div class='tw'><table>"
+                + "<thead><tr><th class='th' style='width:35px'>S.N.</th><th class='th'>SUBJECT</th><th class='th thr' style='width:90px'>AMOUNT</th></tr></thead>"
+                + "<tbody>" + subRows
+                + "<tr class='tot'><td colspan='2' style='border:1px solid #B91C1C;padding:" + tdPad + ";font-weight:800;color:#B91C1C'>Total</td>"
+                + "<td style='border:1px solid #B91C1C;padding:" + tdPad + ";text-align:right;font-weight:800;color:#B91C1C'>&#8377;" + displayTotal.toLocaleString("en-IN") + "</td></tr>"
+                + "<tr><td colspan='3' style='border:1px solid #B91C1C;padding:" + tdPad + ";font-size:" + (isS?"8px":"11px") + "'><strong>In Words -</strong> " + numToWords(displayTotal) + " Rupees Only</td></tr>"
+                + "</tbody></table></div>"
+                + "<div class='sg'><span style='font-weight:700'>Signature</span>"
+                + (due>0 ? "<span style='color:#DC2626;font-weight:700'>&#8377;" + due.toLocaleString("en-IN") + " Remaining Due</span>" : "<span style='color:#16A34A;font-weight:700'>Fully Paid</span>")
+                + "</div></div></body></html>";
+              const w = window.open("","_blank","width=800,height=900");
+              w.document.write(html);
+              w.document.close();
+              setTimeout(function(){w.focus();w.print();},700);
             };
-
             return (
-              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 20, overflowY: "auto" }} onClick={() => setShowReceipt(null)}>
-                <div style={{ background: "#F8FAFD", borderRadius: 16, padding: 24, maxWidth: 560, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.2)", marginTop: 20 }} onClick={e => e.stopPropagation()}>
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 20, overflowY: "auto" }} onClick={() => { setShowReceipt(null); setFeePaymentForm({}); }}>
+                <div style={{ background: "#F8FAFD", borderRadius: 16, padding: 24, maxWidth: 580, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,.2)", marginTop: 20 }} onClick={e => e.stopPropagation()}>
 
-                  {/* Print Size Buttons */}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-                    <h3 style={{ fontSize: "1rem", fontWeight: 800, color: "#0B1826", margin: 0 }}><i className="fas fa-receipt" style={{ marginRight: 8, color: "#D98D04" }} />Fee Receipt</h3>
-                    <div style={{ display: "flex", gap: 6 }}>
+                  {/* Controls */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <h3 style={{ fontSize: "1rem", fontWeight: 800, color: "#0B1826", margin: 0 }}><i className="fas fa-receipt" style={{ marginRight: 8, color: "#D98D04" }} />Fee Receipt</h3>
+                      <button onClick={() => { setShowReceipt(null); setFeePaymentForm({}); }} style={{ background: "none", border: "none", fontSize: "1.1rem", cursor: "pointer", color: "#6B7F99" }}>✕</button>
+                    </div>
+
+                    {/* Installment selector */}
+                    <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontSize: ".75rem", fontWeight: 700, color: "#4A5E78" }}>Installment:</span>
+                      {["all","1","2","3"].map(n => {
+                        const hasAmt = n === "all" ? totalPaid > 0 : Number(st[`inst${n}Amount`] || 0) > 0;
+                        if (n !== "all" && !hasAmt) return null;
+                        return (
+                          <button key={n} type="button"
+                            onClick={() => setFeePaymentForm(prev => ({ ...prev, receiptInst: n }))}
+                            style={{ padding: "5px 12px", borderRadius: 6, border: `1.5px solid ${selInst === n ? "#1349A8" : "#D4DEF0"}`, background: selInst === n ? "#EFF6FF" : "#fff", color: selInst === n ? "#1349A8" : "#6B7F99", fontSize: ".72rem", fontWeight: 700, cursor: "pointer" }}>
+                            {n === "all" ? "All / Full" : `${n}${n==="1"?"st":n==="2"?"nd":"rd"} Inst — ₹${Number(st[`inst${n}Amount`]||0).toLocaleString("en-IN")}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Print size buttons */}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <button onClick={() => printReceipt("small")} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #D4DEF0", background: "#fff", color: "#4A5E78", fontSize: ".72rem", fontWeight: 600, cursor: "pointer" }}><i className="fas fa-print" style={{ marginRight: 4 }} />Small (80mm)</button>
                       <button onClick={() => printReceipt("medium")} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #FDE68A", background: "#FFFBEB", color: "#92400E", fontSize: ".72rem", fontWeight: 600, cursor: "pointer" }}><i className="fas fa-print" style={{ marginRight: 4 }} />A5 Medium</button>
                       <button onClick={() => printReceipt("large")} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#059669", fontSize: ".72rem", fontWeight: 600, cursor: "pointer" }}><i className="fas fa-print" style={{ marginRight: 4 }} />A4 Full</button>
                     </div>
                   </div>
 
-                  {/* ═══ RECEIPT — Exact coaching receipt format ═══ */}
-                  <div id="pid-receipt" style={{ background: "#fff", border: "3px solid #B91C1C", borderRadius: 4, padding: 0, fontFamily: "Arial, sans-serif", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+                  {/* ═══ RECEIPT PREVIEW ═══ */}
+                  <div id="pid-receipt" style={{ background: "#fff", border: "3px solid #B91C1C", borderRadius: 4, fontFamily: "Arial, sans-serif", fontSize: "13px", color: "#333" }}>
 
                     {/* Header */}
-                    <div style={{ textAlign: "center", padding: "12px 16px 8px", borderBottom: "2px solid #B91C1C" }}>
-                      <div style={{ fontSize: ".65rem", color: "#333", marginBottom: 2 }}>पटेल शिक्षण एवं सेवा समिति द्वारा संचालित...</div>
-                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -14 }}>
-                        <div style={{ fontSize: ".6rem", border: "1px solid #333", padding: "1px 6px", background: "#FEF3C7" }}>पंजीयन क्रमांक<br/><strong>122201880553</strong></div>
+                    <div style={{ textAlign: "center", padding: "10px 16px 8px", borderBottom: "2px solid #B91C1C" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 2 }}>
+                        <div style={{ fontSize: ".6rem", color: "#555" }}>पटेल शिक्षण एवं सेवा समिति द्वारा संचालित...</div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <div style={{ fontSize: ".62rem", border: "1px solid #B91C1C", padding: "1px 6px", background: "#FEF2F2", color: "#B91C1C", fontWeight: 700 }}>{instLabel}</div>
+                          <div style={{ fontSize: ".6rem", border: "1px solid #333", padding: "1px 6px", background: "#FEF3C7", textAlign: "center" }}>पंजीयन क्रमांक<br/><strong>122201880553</strong></div>
+                        </div>
                       </div>
                       <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#B91C1C", fontFamily: "Impact, sans-serif", letterSpacing: 2 }}>PATEL INSTITUTE</div>
                       <div style={{ fontSize: ".78rem", fontWeight: 700, color: "#333" }}>Matiya Road, Near Saket Dham, Dongargaon</div>
@@ -6196,24 +7063,32 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                     </div>
 
                     {/* Student Details */}
-                    <div style={{ padding: "10px 16px", fontSize: ".78rem", color: "#333" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <div style={{ padding: "10px 16px 6px", fontSize: ".78rem" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
                         <span><strong>S.No.:</strong> {st.formNo || "—"}</span>
-                        <span><strong>Date:</strong> {new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })}</span>
+                        <span><strong>Date:</strong> {receiptDate}</span>
                       </div>
                       <div style={{ marginBottom: 4 }}><strong>Student Name:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1, minWidth: 200, display: "inline-block" }}>{st.studentName || ""}</span></div>
                       <div style={{ marginBottom: 4 }}><strong>Father Name:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1, minWidth: 200, display: "inline-block" }}>{st.fatherName || ""}</span></div>
                       <div style={{ marginBottom: 4 }}><strong>Address:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1, minWidth: 200, display: "inline-block" }}>{st.permanentAddress || ""}</span></div>
-                      <div style={{ display: "flex", gap: 16, marginBottom: 6 }}>
-                        <span><strong>Class:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1 }}>{st.class || ""}</span></span>
-                        <span><strong>Medium:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1 }}>{st.medium || ""}</span></span>
-                        <span><strong>Board:</strong> <span style={{ borderBottom: "1px dotted #999", paddingBottom: 1 }}>{st.board || ""}</span></span>
+                      <div style={{ display: "flex", gap: 16, marginBottom: 4 }}>
+                        <span><strong>Class:</strong> <span style={{ borderBottom: "1px dotted #999" }}>{st.class || ""}</span></span>
+                        <span><strong>Medium:</strong> <span style={{ borderBottom: "1px dotted #999" }}>{st.medium || ""}</span></span>
+                        <span><strong>Board:</strong> <span style={{ borderBottom: "1px dotted #999" }}>{st.board || ""}</span></span>
                       </div>
                     </div>
 
-                    {/* Subject-wise Fee Table */}
+                    {/* Payment Info Bar */}
+                    <div style={{ background: "#F0FDF4", borderTop: "1px solid #86EFAC", borderBottom: "1px solid #86EFAC", padding: "6px 16px", fontSize: ".72rem", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                      <span>💳 <strong>Mode:</strong> {receiptMode}</span>
+                      <span>📅 <strong>Date:</strong> {receiptDate}</span>
+                      {selInst !== "all" && getInstNote(selInst) && <span>📝 {getInstNote(selInst)}</span>}
+                      {total > 0 && <span>💰 <strong>Total Fee:</strong> ₹{total.toLocaleString("en-IN")} | <strong>Due:</strong> <span style={{ color: due > 0 ? "#DC2626" : "#16A34A" }}>₹{due.toLocaleString("en-IN")}</span></span>}
+                    </div>
+
+                    {/* Subject Fee Table */}
                     <div style={{ padding: "0 16px 10px" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem", border: "2px solid #B91C1C" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: ".78rem", border: "2px solid #B91C1C", marginTop: 10 }}>
                         <thead>
                           <tr style={{ background: "#FEF2F2" }}>
                             <th style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "left", fontWeight: 700, width: 35 }}>S.N.</th>
@@ -6224,31 +7099,34 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                         <tbody>
                           {subjects.map((sub, i) => (
                             <tr key={i}>
-                              <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", fontWeight: 700 }}>{i + 1}.</td>
+                              <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", fontWeight: 700 }}>{i+1}.</td>
                               <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", fontWeight: 700 }}>{sub.name.toUpperCase()}</td>
                               <td style={{ border: "1px solid #B91C1C", padding: "5px 10px", textAlign: "right" }}>{sub.fee ? `₹${Number(sub.fee).toLocaleString("en-IN")}` : ""}</td>
                             </tr>
                           ))}
                           <tr style={{ background: "#FEF2F2" }}>
                             <td colSpan={2} style={{ border: "1px solid #B91C1C", padding: "6px 10px", fontWeight: 800, color: "#B91C1C" }}>Total</td>
-                            <td style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "right", fontWeight: 800, color: "#B91C1C" }}>₹{(subjectTotal > 0 ? subjectTotal : total).toLocaleString("en-IN")}</td>
+                            <td style={{ border: "1px solid #B91C1C", padding: "6px 10px", textAlign: "right", fontWeight: 800, color: "#B91C1C" }}>₹{displayTotal.toLocaleString("en-IN")}</td>
                           </tr>
                           <tr>
-                            <td colSpan={3} style={{ border: "1px solid #B91C1C", padding: "6px 10px", fontSize: ".72rem" }}><strong>In Words -</strong> {numToWords(subjectTotal > 0 ? subjectTotal : total)} Rupees Only</td>
+                            <td colSpan={3} style={{ border: "1px solid #B91C1C", padding: "6px 10px", fontSize: ".72rem" }}><strong>In Words -</strong> {numToWords(displayTotal)} Rupees Only</td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
 
-                    {/* Signature */}
-                    <div style={{ padding: "16px 16px 12px", textAlign: "left" }}>
-                      <div style={{ fontSize: ".78rem", fontWeight: 700, color: "#333" }}>Signature</div>
+                    {/* Signature + Due */}
+                    <div style={{ padding: "12px 16px 14px", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+                      <div style={{ fontSize: ".78rem", fontWeight: 700 }}>Signature</div>
+                      {due > 0
+                        ? <div style={{ fontSize: ".72rem", color: "#DC2626", fontWeight: 700 }}>Remaining Due: ₹{due.toLocaleString("en-IN")}</div>
+                        : <div style={{ fontSize: ".72rem", color: "#16A34A", fontWeight: 700 }}>✓ Fully Paid</div>}
                     </div>
                   </div>
 
                   {/* Close Button */}
                   <div style={{ textAlign: "center", marginTop: 16 }}>
-                    <button onClick={() => setShowReceipt(null)} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#1349A8", color: "#fff", fontSize: ".82rem", fontWeight: 700, cursor: "pointer" }}>Close Receipt</button>
+                    <button onClick={() => { setShowReceipt(null); setFeePaymentForm({}); }} style={{ padding: "10px 28px", borderRadius: 8, border: "none", background: "#1349A8", color: "#fff", fontSize: ".82rem", fontWeight: 700, cursor: "pointer" }}>Close Receipt</button>
                   </div>
                 </div>
               </div>
