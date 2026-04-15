@@ -88,6 +88,7 @@ export default function StudentApp() {
   // ── Explore & My Batches State ──
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [selectedSubject, setSelectedSubject] = useState(null);
+  const [selectedChapter, setSelectedChapter] = useState(null);
   const [showUpiModal, setShowUpiModal] = useState(false);
 
   // ── AI Doubt Solver State ──
@@ -1495,23 +1496,147 @@ ${hist ? `═══ CONVERSATION SO FAR ═══\n${hist}\n\n` : ""}Student ask
                     ))}
                   </div>
                 </>
+              ) : !selectedChapter ? (
+                <>
+                 <button onClick={() => { setSelectedCourse(null); setSelectedChapter(null); setSelectedSubject(null); }} style={{ background: "none", border: "none", color: T.text3, marginBottom: 16, display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer" }}><I n="arrow-left" /> Back</button>
+                  <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 16px" }}>Subjects</h2>
+                  {(() => {
+                    const subjectMaterials = materials.filter(m => m.subject === selectedSubject);
+                    const chapters = [...new Set(subjectMaterials.map(m => m.chapter).filter(Boolean))];
+                    if (chapters.length === 0) return <p style={{ fontSize: ".85rem", color: T.text3, textAlign: "center", marginTop: 40 }}>No chapters available yet.</p>;
+                    return chapters.map(ch => {
+                      const chMats = subjectMaterials.filter(m => m.chapter === ch);
+                      const hasLecture = chMats.some(m => m.materialType === "lecture");
+                      const hasNotes = chMats.some(m => m.materialType === "notes");
+                      const hasDpp = chMats.some(m => m.materialType === "dpp");
+                      return (
+                        <div key={ch} onClick={() => setSelectedChapter(ch)} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 16, marginBottom: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 14 }}>
+                          <div style={{ width: 44, height: 44, borderRadius: 12, background: dark ? "#0F1E38" : "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <I n="book-open" s={20} c={T.accent} />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <h4 style={{ margin: 0, fontSize: ".9rem", fontWeight: 700 }}>{ch}</h4>
+                            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                              {hasLecture && <span style={{ padding: "2px 8px", borderRadius: 6, background: "#FEE2E2", color: "#DC2626", fontSize: ".62rem", fontWeight: 700 }}>📹 Lecture</span>}
+                              {hasNotes && <span style={{ padding: "2px 8px", borderRadius: 6, background: "#DBEAFE", color: "#1349A8", fontSize: ".62rem", fontWeight: 700 }}>📄 Notes</span>}
+                              {hasDpp && <span style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#D98D04", fontSize: ".62rem", fontWeight: 700 }}>📝 DPP</span>}
+                            </div>
+                          </div>
+                          <I n="chevron-right" c={T.text3} />
+                        </div>
+                      );
+                    });
+                  })()}
+                </>
               ) : (
                 <>
-                  <button onClick={() => setSelectedSubject(null)} style={{ background: "none", border: "none", color: T.text3, marginBottom: 16, display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer" }}><I n="arrow-left" /> Back</button>
-                  <h2 style={{ fontSize: "1.3rem", fontWeight: 800, margin: "0 0 16px" }}>{selectedSubject} Materials</h2>
-                  {materials.filter(m => m.subject === selectedSubject).map(m => (
-                    <div key={m.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, marginBottom: 12, display: "flex", alignItems: "center", gap: 12 }}>
-                      <div style={{ width: 40, height: 40, borderRadius: 10, background: dark ? "#0F1E38" : "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <I n={m.materialType === "video" ? "play" : "file-pdf"} c={T.accent} />
+                  <button onClick={() => setSelectedChapter(null)} style={{ background: "none", border: "none", color: T.text3, marginBottom: 16, display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer" }}><I n="arrow-left" /> Back to Chapters</button>
+                  <h2 style={{ fontSize: "1.1rem", fontWeight: 800, margin: "0 0 4px" }}>{selectedChapter}</h2>
+                  <p style={{ margin: "0 0 16px", fontSize: ".72rem", color: T.text3 }}>{selectedSubject}</p>
+
+                  {/* ── LECTURES ── */}
+                  {materials.filter(m => m.subject === selectedSubject && m.chapter === selectedChapter && m.materialType === "lecture").map(m => {
+                    // Helper to convert YouTube URLs to embed format
+                    const getEmbedUrl = (url) => {
+                      if (!url) return "";
+                      // Already an embed link
+                      if (url.includes("youtube.com/embed/") || url.includes("youtube-nocookie.com/embed/")) return url;
+                      // Standard watch link
+                      const watchMatch = url.match(/(?:youtube\.com\/watch\?v=)([^&]+)/);
+                      if (watchMatch) return `https://www.youtube.com/embed/${watchMatch[1]}`;
+                      // youtu.be short link
+                      const shortMatch = url.match(/(?:youtu\.be\/)([^?&]+)/);
+                      if (shortMatch) return `https://www.youtube.com/embed/${shortMatch[1]}`;
+                      // Direct video file (mp4, webm, etc.) – keep as is
+                      return url;
+                    };
+                    const embedUrl = getEmbedUrl(m.videoUrl);
+                    const isDirectVideo = /\.(mp4|webm|ogg|mov)$/i.test(m.videoUrl || "");
+                    const isYouTube = embedUrl.includes("youtube.com/embed/");
+
+                    return (
+                      <div key={m.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, marginBottom: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 10, background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <I n="play" s={18} c="#DC2626" />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <h4 style={{ margin: 0, fontSize: ".88rem", fontWeight: 700 }}>{m.title}</h4>
+                            {m.duration && <p style={{ margin: "2px 0 0", fontSize: ".65rem", color: T.text3 }}>⏱ {m.duration}</p>}
+                          </div>
+                        </div>
+                        {m.videoUrl && (
+                          <div style={{ borderRadius: 10, overflow: "hidden", marginBottom: 10, aspectRatio: "16/9", background: "#000" }}>
+                            {isDirectVideo ? (
+                              <video controls style={{ width: "100%", height: "100%", objectFit: "contain" }} src={m.videoUrl} />
+                            ) : (
+                              <iframe
+                                src={embedUrl}
+                                style={{ width: "100%", height: "100%", border: "none" }}
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowFullScreen
+                                title={m.title}
+                              />
+                            )}
+                          </div>
+                        )}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {m.fileUrl && (
+                            <a href={m.fileUrl} target="_blank" rel="noopener noreferrer" style={{ flex: 1, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", padding: "8px 0", borderRadius: 8, fontSize: ".75rem", fontWeight: 700, textDecoration: "none", textAlign: "center" }}>
+                              📄 Notes PDF
+                            </a>
+                          )}
+                          {m.fileUrl && (
+                            <a href={m.fileUrl} download target="_blank" rel="noopener noreferrer" style={{ background: dark ? "#1E293B" : "#F1F5F9", color: T.text, padding: "8px 12px", borderRadius: 8, fontSize: ".75rem", fontWeight: 700, textDecoration: "none", textAlign: "center" }}>
+                              ⬇
+                            </a>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <h4 style={{ margin: 0, fontSize: ".88rem", fontWeight: 700 }}>{m.title}</h4>
-                        <p style={{ margin: "2px 0 0", fontSize: ".7rem", color: T.text3 }}>{m.chapter} • {m.materialType?.toUpperCase()}</p>
+                    );
+                  })}
+
+                  {/* ── NOTES ── */}
+                  {materials.filter(m => m.subject === selectedSubject && m.chapter === selectedChapter && m.materialType === "notes").map(m => (
+                    <div key={m.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 10, background: "#DBEAFE", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <I n="file-alt" s={18} c="#1349A8" />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <h4 style={{ margin: 0, fontSize: ".88rem", fontWeight: 700 }}>{m.title}</h4>
+                          <p style={{ margin: "2px 0 0", fontSize: ".65rem", color: T.text3 }}>📄 Notes / Chapter Summary</p>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {m.fileUrl && <a href={m.fileUrl} target="_blank" rel="noopener noreferrer" style={{ background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", padding: "6px 12px", borderRadius: 8, fontSize: ".72rem", fontWeight: 700, textDecoration: "none" }}>View</a>}
+                          {m.fileUrl && <a href={m.fileUrl} download target="_blank" rel="noopener noreferrer" style={{ background: dark ? "#1E293B" : "#F1F5F9", color: T.text, padding: "6px 10px", borderRadius: 8, fontSize: ".72rem", fontWeight: 700, textDecoration: "none" }}>⬇</a>}
+                        </div>
                       </div>
-                      <a href={m.fileUrl || m.videoUrl} target="_blank" rel="noopener noreferrer" style={{ background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", padding: "6px 14px", borderRadius: 8, fontSize: ".75rem", fontWeight: 700, textDecoration: "none" }}>View</a>
                     </div>
                   ))}
-                  {materials.filter(m => m.subject === selectedSubject).length === 0 && <p style={{ fontSize: ".85rem", color: T.text3, textAlign: "center", marginTop: 40 }}>No materials uploaded yet.</p>}
+
+                  {/* ── DPP ── */}
+                  {materials.filter(m => m.subject === selectedSubject && m.chapter === selectedChapter && m.materialType === "dpp").map(m => (
+                    <div key={m.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 10, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <I n="tasks" s={18} c="#D98D04" />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <h4 style={{ margin: 0, fontSize: ".88rem", fontWeight: 700 }}>{m.title}</h4>
+                          <p style={{ margin: "2px 0 0", fontSize: ".65rem", color: T.text3 }}>📝 Daily Practice Paper</p>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {m.fileUrl && <a href={m.fileUrl} target="_blank" rel="noopener noreferrer" style={{ background: `linear-gradient(135deg, #D98D04, #B45309)`, color: "#fff", padding: "6px 12px", borderRadius: 8, fontSize: ".72rem", fontWeight: 700, textDecoration: "none" }}>View</a>}
+                          {m.fileUrl && <a href={m.fileUrl} download target="_blank" rel="noopener noreferrer" style={{ background: dark ? "#1E293B" : "#F1F5F9", color: T.text, padding: "6px 10px", borderRadius: 8, fontSize: ".72rem", fontWeight: 700, textDecoration: "none" }}>⬇</a>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {materials.filter(m => m.subject === selectedSubject && m.chapter === selectedChapter && ["lecture","notes","dpp"].includes(m.materialType)).length === 0 && (
+                    <p style={{ fontSize: ".85rem", color: T.text3, textAlign: "center", marginTop: 40 }}>No materials in this chapter yet.</p>
+                  )}
                 </>
               )}
             </div>
