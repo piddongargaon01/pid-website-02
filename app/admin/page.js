@@ -482,6 +482,7 @@ export default function AdminPanel() {
   const [holidayForm, setHolidayForm] = useState({});
   const [showHolidayForm, setShowHolidayForm] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [teacherNotifications, setTeacherNotifications] = useState([]);
   const [leaveApplications, setLeaveApplications] = useState([]); // parent/student leave requests
   const [teacherLeaves, setTeacherLeaves] = useState([]); // teacher leave requests
   const [notifForm, setNotifForm] = useState({});
@@ -704,6 +705,12 @@ export default function AdminPanel() {
       arr.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
       setNotifications(arr);
     }));
+    // Teacher notifications listener
+    unsubs.push(onSnapshot(collection(db, "notifications"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
+      setTeacherNotifications(arr);
+    }));
     // ═══ EXAMS LISTENER ═══
     unsubs.push(onSnapshot(collection(db, "exams"), s => {
       const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -711,6 +718,9 @@ export default function AdminPanel() {
       setExamList(arr);
     }));
     // ═══ ONLINE TESTS LISTENER ═══
+    unsubs.push(onSnapshot(collection(db, "online_test_results"), s => {
+      setOtResults(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    }));
     unsubs.push(onSnapshot(collection(db, "online_tests"), s => {
       const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
       arr.sort((a, b) => (b.createdAt?.toDate?.() || new Date(0)) - (a.createdAt?.toDate?.() || new Date(0)));
@@ -724,9 +734,15 @@ export default function AdminPanel() {
       const studentLv = arr.filter(lv => !lv.teacherId);
       teacherLv.sort((a, b) => (b.createdAt?.toDate?.() || 0) - (a.createdAt?.toDate?.() || 0));
       studentLv.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-      setTeacherLeaves(teacherLv);
       setLeaveApplications(studentLv);
-    }));
+    // teacher leaves alag collection se aayenge
+  }));
+  // Teacher leaves — leave_requests collection
+unsubs.push(onSnapshot(collection(db, "leave_requests"), s => {
+  const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+  arr.sort((a, b) => (b.createdAt?.toDate?.() || 0) - (a.createdAt?.toDate?.() || 0));
+  setTeacherLeaves(arr);
+}));
     return () => unsubs.forEach(u => u());
   }, [isAdmin]);
 
@@ -752,7 +768,7 @@ export default function AdminPanel() {
         board: otForm.board || "",
         medium: otForm.medium || "",
         difficulty: otForm.difficulty || "medium",
-        isActive: otForm.isActive !== false,
+        isActive: false, // Hamesha inactive se start — scheduled time pe auto-active hoga
         scheduledDate: otForm.scheduledDate || "",
         scheduledTime: otForm.scheduledTime || "",
         questions: otQuestions.map(q => ({
@@ -1738,10 +1754,46 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
       if (notifForm.editId) {
         const { editId: eid, ...rest } = data;
         await updateDoc(doc(db, "scheduled_notifications", eid), { ...rest, updatedAt: serverTimestamp() });
+        // Agar teacher target hai to notifications collection bhi update karo
+        if (rest.sendToTeachers && rest.teacherNotifDocId) {
+          await updateDoc(doc(db, "notifications", rest.teacherNotifDocId), {
+            message: rest.message, type: rest.notifType || "general", scheduledDate: rest.date, scheduledTime: rest.time || "",
+            forTeacher: rest.teacherTarget || "all", targetType: "teacher", updatedAt: serverTimestamp(),
+          });
+        }
         showMsg("Notification updated!");
       } else {
-        await addDoc(collection(db, "scheduled_notifications"), { ...data, createdAt: serverTimestamp() });
-        showMsg("Notification scheduled!");
+        if (data.target === "teachers_all") {
+          // Sirf teachers ko — notifications collection me save karo
+          await addDoc(collection(db, "notifications"), {
+            message: data.message,
+            type: data.notifType || "general",
+            scheduledDate: data.date,
+            scheduledTime: data.time || "",
+            forTeacher: "all",
+            targetType: "teacher",
+            sentBy: "Admin",
+            createdAt: serverTimestamp(),
+          });
+          showMsg("Notification sabhi Teachers ko bhej diya!");
+        } else {
+          // Students/Parents ke liye — scheduled_notifications me save karo
+          const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, createdAt: serverTimestamp() });
+          if (data.sendToTeachers) {
+            const teacherNotifDoc = await addDoc(collection(db, "notifications"), {
+              message: data.message,
+              type: data.notifType || "general",
+              scheduledDate: data.date,
+              scheduledTime: data.time || "",
+              forTeacher: data.teacherTarget || "all",
+              targetType: "teacher",
+              sentBy: "Admin",
+              createdAt: serverTimestamp(),
+            });
+            await updateDoc(doc(db, "scheduled_notifications", newDoc.id), { teacherNotifDocId: teacherNotifDoc.id });
+          }
+          showMsg("Notification scheduled!" + (data.sendToTeachers ? " Teachers ko bhi bheja gaya." : ""));
+        }
       }
       setShowNotifForm(false); setNotifForm({});
     } catch (e) { showMsg("Error: " + e.message); }
@@ -1750,6 +1802,31 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
   async function deleteNotification(id) {
     if (!confirm("Delete this notification?")) return;
     try { await deleteDoc(doc(db, "scheduled_notifications", id)); showMsg("Notification deleted!"); } catch (e) { showMsg("Error!"); }
+  }
+
+  async function deleteTeacherNotification(id) {
+    if (!confirm("Is teacher notification ko delete karo?")) return;
+    try { await deleteDoc(doc(db, "notifications", id)); showMsg("Teacher notification deleted!"); } catch (e) { showMsg("Error!"); }
+  }
+
+  async function saveTeacherNotification() {
+    if (!notifForm.message?.trim()) { showMsg("Message required hai!"); return; }
+    setSaving(true);
+    try {
+      if (notifForm.editTeacherId) {
+        await updateDoc(doc(db, "notifications", notifForm.editTeacherId), {
+          message: notifForm.message,
+          type: notifForm.notifType || "general",
+          scheduledDate: notifForm.date || "",
+          scheduledTime: notifForm.time || "",
+          forTeacher: notifForm.teacherTarget || "all",
+          updatedAt: serverTimestamp(),
+        });
+        showMsg("Teacher notification updated!");
+      }
+      setShowNotifForm(false); setNotifForm({});
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
   }
 
   // ═══════════════════════════════════════════
@@ -1961,7 +2038,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
   // ═══════════════════════════════════════════
   const s = {
     page: { fontFamily: "'DM Sans',sans-serif", background: "#F0F4FA", minHeight: "100vh" },
-    sidebar: { width: 230, background: "#0C1F36", color: "#fff", position: "fixed", top: 0, left: 0, bottom: 0, padding: "20px 0", overflowY: "auto", zIndex: 100, transition: "transform .3s" },
+    sidebar: { width: 230, background: "#0C1F36", color: "#fff", position: "fixed", top: 0, left: 0, overflowY: "auto", height: "100vh", bottom: 0, padding: "20px 0", overflowY: "auto", zIndex: 100, transition: "transform .3s" },
     main: { marginLeft: 230, padding: "24px", minHeight: "100vh" },
     tabBtn: (active) => ({ width: "100%", padding: "11px 20px", border: "none", background: active ? "rgba(255,255,255,.1)" : "transparent", color: active ? "#fff" : "#9FB8CF", fontSize: ".82rem", fontWeight: active ? 700 : 500, cursor: "pointer", textAlign: "left", display: "flex", alignItems: "center", gap: 10, borderLeft: active ? "3px solid #F5AC10" : "3px solid transparent", transition: "all .15s" }),
     card: { background: "#fff", borderRadius: 12, border: "1px solid #D4DEF0", padding: 20, marginBottom: 16 },
@@ -2028,6 +2105,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     { id: "fees", icon: "fa-rupee-sign", label: "Fee Management" },
     { id: "settings", icon: "fa-cog", label: "Website Settings" },
     { id: "leave_alerts", icon: "fa-calendar-times", label: "Leave Alerts" },
+    { id: "ranks", icon: "fa-medal", label: "Student Rankings" },
   ];
 
   const pendingReviews = reviews.filter(r => !r.approved);
@@ -2547,19 +2625,318 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
 
         {/* ═══════════ SETTINGS TAB ═══════════ */}
         {/* ═══════════ LEAVE ALERTS TAB ═══════════ */}
+        {tab === "ranks" && (() => {
+          // ── Rankings Tab ──
+          const CLASS_CATS_R = [
+            { id: "all", label: "All Students" },
+            { id: "12th-Eng-CG", label: "12th English (CG)", class: "12th", medium: "English", boards: ["CG"] },
+            { id: "12th-Hindi-CG-CBSE", label: "12th Hindi (CG+CBSE)", class: "12th", medium: "Hindi", boards: ["CG","CBSE"] },
+            { id: "12th-Eng-CBSE-ICSE", label: "12th English (CBSE+ICSE)", class: "12th", medium: "English", boards: ["CBSE","ICSE"] },
+            { id: "11th-Eng-CG", label: "11th English (CG)", class: "11th", medium: "English", boards: ["CG"] },
+            { id: "11th-Hindi-CG-CBSE", label: "11th Hindi (CG+CBSE)", class: "11th", medium: "Hindi", boards: ["CG","CBSE"] },
+            { id: "10th-Eng-All", label: "10th English (All)", class: "10th", medium: "English", boards: ["CG","CBSE","ICSE"] },
+            { id: "10th-Hindi-CG-CBSE", label: "10th Hindi (CG+CBSE)", class: "10th", medium: "Hindi", boards: ["CG","CBSE"] },
+            { id: "9th-Eng-All", label: "9th English (All)", class: "9th", medium: "English", boards: ["CG","CBSE","ICSE"] },
+            { id: "9th-Hindi-CG-CBSE", label: "9th Hindi (CG+CBSE)", class: "9th", medium: "Hindi", boards: ["CG","CBSE"] },
+            { id: "2nd-8th-All", label: "2nd-8th All", class: "2nd-8th" },
+            { id: "JEE-NEET", label: "JEE-NEET" },
+          ];
+
+          function filterStudentsR(studs, catId) {
+            if (catId === "all") return studs;
+            const cat = CLASS_CATS_R.find(c => c.id === catId);
+            if (!cat || !cat.class) return studs;
+            if (cat.class === "2nd-8th") return studs.filter(s => ["2nd","3rd","4th","5th","6th","7th","8th"].includes(s.class));
+            if (cat.id === "JEE-NEET") return studs.filter(s => ["9th","10th","11th","12th"].includes(s.class));
+            return studs.filter(s => {
+              if ((s.class || s.presentClass) !== cat.class) return false;
+              if (cat.medium && s.medium !== cat.medium) return false;
+              const nb = s.board === "CG Board" ? "CG" : s.board;
+              if (cat.boards?.length > 0 && !cat.boards.includes(nb)) return false;
+              return true;
+            });
+          }
+
+          function RankTab() {
+            const [classCat, setClassCat] = useState("all");
+            const [rankType, setRankType] = useState("exam");
+            const [selExam, setSelExam] = useState(null);
+            const [selTest, setSelTest] = useState(null);
+            const [subjectView, setSubjectView] = useState("overall");
+            const [examMarksData, setExamMarksData] = useState([]);
+            const [otResultsData, setOtResultsData] = useState([]);
+            const [loadingRank, setLoadingRank] = useState(false);
+
+            const filteredStuds = filterStudentsR(students, classCat);
+            const filteredIds = new Set(filteredStuds.map(s => s.id));
+
+            useEffect(() => {
+              if (!selExam) { setExamMarksData([]); return; }
+              setLoadingRank(true);
+              getDocs(query(collection(db, "exam_marks"), where("examId", "==", selExam.id)))
+                .then(snap => { setExamMarksData(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoadingRank(false); })
+                .catch(() => setLoadingRank(false));
+            }, [selExam]);
+
+            useEffect(() => {
+              if (!selTest) { setOtResultsData([]); return; }
+              setLoadingRank(true);
+              getDocs(query(collection(db, "quiz_history"), where("examId", "==", selTest.id)))
+                .then(snap => {
+                  const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                  if (data.length > 0) { setOtResultsData(data); setLoadingRank(false); return; }
+                  return getDocs(query(collection(db, "online_test_results"), where("testId", "==", selTest.id)));
+                })
+                .then(snap => { if (snap?.docs) setOtResultsData(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoadingRank(false); })
+                .catch(() => setLoadingRank(false));
+            }, [selTest]);
+
+            function getExamRankings() {
+              if (!selExam) return [];
+              const rows = examMarksData
+                .filter(m => filteredIds.has(m.studentId))
+                .map(m => {
+                  const marks = m.marks || {};
+                  const total = m.totalMarks || Object.values(marks).reduce((s, v) => s + (Number(v) || 0), 0);
+                  const maxM = selExam.maxMarks || Object.keys(marks).length * 100;
+                  const pct = maxM > 0 ? Math.round((total / maxM) * 100) : 0;
+                  return { studentId: m.studentId, studentName: m.studentName || "Unknown", studentClass: m.studentClass || "", marks, total, pct };
+                });
+              if (subjectView === "overall") rows.sort((a, b) => b.pct - a.pct || b.total - a.total);
+              else rows.sort((a, b) => (Number(b.marks[subjectView]) || 0) - (Number(a.marks[subjectView]) || 0));
+              return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+            }
+
+            function getTestRankings() {
+              if (!selTest) return [];
+              const rows = otResultsData
+                .filter(r => filteredIds.has(r.studentId))
+                .map(r => {
+                  const score = r.correctAnswers || r.score || 0;
+                  const total = r.totalQuestions || r.total || selTest.totalQuestions || 0;
+                  const pct = total > 0 ? Math.round((score / total) * 100) : (r.percentage || 0);
+                  return { studentId: r.studentId, studentName: r.studentName || "Unknown", studentClass: r.studentClass || "", score, total, pct };
+                });
+              rows.sort((a, b) => b.pct - a.pct || b.score - a.score);
+              return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+            }
+
+            const rankings = rankType === "exam" ? getExamRankings() : getTestRankings();
+            const subjectList = selExam && examMarksData.length > 0
+              ? [...new Set(examMarksData.flatMap(m => Object.keys(m.marks || {})))]
+              : [];
+
+            const medalColor = (i) => i === 0 ? "#D4A843" : i === 1 ? "#9CA3AF" : i === 2 ? "#C97B4B" : null;
+            const pctColor = (p) => p >= 75 ? "#059669" : p >= 50 ? "#D97706" : "#DC2626";
+
+            return (
+              <div style={{ padding: "20px 24px" }}>
+                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#0B1826", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+                  <i className="fas fa-medal" style={{ color: "#D4A843" }} /> Student Rankings
+                  <span style={{ marginLeft: "auto", fontSize: ".72rem", background: "#F0F4FA", padding: "4px 12px", borderRadius: 20, color: "#6B7F99" }}>{filteredStuds.length} Students</span>
+                </h2>
+
+                {/* Filters */}
+                <div style={{ background: "#F8FAFD", borderRadius: 14, padding: 16, marginBottom: 20, border: "1px solid #E8EFF8", display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+
+                  {/* Class Filter */}
+                  <div>
+                    <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", textTransform: "uppercase", marginBottom: 6 }}>Class / Batch</div>
+                    <select
+                      value={classCat}
+                      onChange={e => setClassCat(e.target.value)}
+                      style={{ padding: "8px 12px", borderRadius: 8, border: "1.5px solid #D4DEF0", fontSize: ".8rem", fontWeight: 600, cursor: "pointer", minWidth: 200 }}>
+                      {CLASS_CATS_R.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Rank Type */}
+                  <div>
+                    <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", textTransform: "uppercase", marginBottom: 6 }}>Rank By</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {[{ v: "exam", l: "Exam / Test", icon: "fa-file-alt" }, { v: "online_test", l: "Online Test", icon: "fa-laptop" }].map(t => (
+                        <button key={t.v}
+                          onClick={() => { setRankType(t.v); setSelExam(null); setSelTest(null); setSubjectView("overall"); }}
+                          style={{ padding: "8px 16px", borderRadius: 8, border: `1.5px solid ${rankType === t.v ? "#1349A8" : "#D4DEF0"}`, background: rankType === t.v ? "#EFF6FF" : "#fff", color: rankType === t.v ? "#1349A8" : "#6B7F99", fontWeight: 700, fontSize: ".8rem", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                          <i className={`fas ${t.icon}`} />{t.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Exam / Test Selector */}
+                  {rankType === "exam" && (
+                    <div>
+                      <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", textTransform: "uppercase", marginBottom: 6 }}>Exam Select Karo</div>
+                      <select
+                        value={selExam?.id || ""}
+                        onChange={e => { const ex = examList.find(ex => ex.id === e.target.value); setSelExam(ex || null); setSubjectView("overall"); }}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1.5px solid #D4DEF0", fontSize: ".8rem", fontWeight: 600, cursor: "pointer", minWidth: 200 }}>
+                        <option value="">-- Exam Chuno --</option>
+                        {examList.map(ex => <option key={ex.id} value={ex.id}>{ex.title || ex.name} ({ex.date || ""})</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  {rankType === "online_test" && (
+                    <div>
+                      <div style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99", textTransform: "uppercase", marginBottom: 6 }}>Online Test Select Karo</div>
+                      <select
+                        value={selTest?.id || ""}
+                        onChange={e => { const t = otList.find(t => t.id === e.target.value); setSelTest(t || null); }}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1.5px solid #D4DEF0", fontSize: ".8rem", fontWeight: 600, cursor: "pointer", minWidth: 200 }}>
+                        <option value="">-- Test Chuno --</option>
+                        {otList.map(t => <option key={t.id} value={t.id}>{t.title} ({t.subject || ""})</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {/* Subject Chips */}
+                {rankType === "exam" && selExam && subjectList.length > 0 && (
+                  <div style={{ marginBottom: 16, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99" }}>Subject:</span>
+                    {["overall", ...subjectList].map(sub => (
+                      <button key={sub}
+                        onClick={() => setSubjectView(sub)}
+                        style={{ padding: "5px 14px", borderRadius: 20, border: `1.5px solid ${subjectView === sub ? "#1349A8" : "#D4DEF0"}`, background: subjectView === sub ? "#1349A8" : "#fff", color: subjectView === sub ? "#fff" : "#6B7F99", fontWeight: 700, fontSize: ".72rem", cursor: "pointer", textTransform: "capitalize" }}>
+                        {sub === "overall" ? "Overall" : sub}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Rankings Table */}
+                {loadingRank ? (
+                  <div style={{ textAlign: "center", padding: "60px 20px", color: "#6B7F99" }}>
+                    <i className="fas fa-spinner fa-spin" style={{ fontSize: "2rem", color: "#1349A8" }} />
+                    <div style={{ marginTop: 10 }}>Loading ranks...</div>
+                  </div>
+                ) : !selExam && !selTest ? (
+                  <div style={{ textAlign: "center", padding: "60px 20px", color: "#6B7F99" }}>
+                    <i className="fas fa-medal" style={{ fontSize: "2.5rem", color: "#D4DEF0" }} />
+                    <div style={{ marginTop: 12, fontWeight: 700, fontSize: "1rem", color: "#4A5E78" }}>Exam ya Test select karo</div>
+                    <div style={{ marginTop: 4, fontSize: ".82rem" }}>Rankings yahan dikhenge</div>
+                  </div>
+                ) : rankings.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "60px 20px", color: "#6B7F99" }}>
+                    <i className="fas fa-inbox" style={{ fontSize: "2rem", color: "#D4DEF0" }} />
+                    <div style={{ marginTop: 10, fontWeight: 700 }}>Koi result nahi mila</div>
+                  </div>
+                ) : (
+                  <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E8EFF8", overflow: "hidden" }}>
+
+                    {/* Table Header */}
+                    <div style={{ padding: "12px 18px", borderBottom: "2px solid #E8EFF8", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#F5F8FF" }}>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: ".95rem", color: "#0B1826" }}>
+                          {rankType === "exam" ? (selExam?.title || selExam?.name) : selTest?.title}
+                        </div>
+                        <div style={{ fontSize: ".72rem", color: "#6B7F99", marginTop: 2 }}>
+                          {rankings.length} students ranked
+                          {subjectView !== "overall" && <span style={{ marginLeft: 8, background: "#EFF6FF", color: "#1349A8", padding: "2px 8px", borderRadius: 20, fontWeight: 700 }}>Subject: {subjectView}</span>}
+                        </div>
+                      </div>
+                      <span style={{ fontSize: ".72rem", fontWeight: 700, color: "#6B7F99" }}>{CLASS_CATS_R.find(c => c.id === classCat)?.label}</span>
+                    </div>
+
+                    {/* Table */}
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ background: "#F8FAFD", borderBottom: "2px solid #E8EFF8" }}>
+                            <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "left", textTransform: "uppercase", width: 60 }}>Rank</th>
+                            <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "left", textTransform: "uppercase" }}>Student</th>
+                            <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "left", textTransform: "uppercase" }}>Class</th>
+                            {rankType === "exam" && subjectView === "overall" && subjectList.map(sub => (
+                              <th key={sub} style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "center", textTransform: "uppercase" }}>{sub}</th>
+                            ))}
+                            {rankType === "exam" && subjectView !== "overall" && (
+                              <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "center" }}>{subjectView} Marks</th>
+                            )}
+                            {rankType === "online_test" && (
+                              <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "center" }}>Score</th>
+                            )}
+                            <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "center", textTransform: "uppercase" }}>%</th>
+                            <th style={{ padding: "10px 14px", fontSize: ".72rem", fontWeight: 800, color: "#4A5E78", textAlign: "center", textTransform: "uppercase" }}>Grade</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rankings.map((r, i) => {
+                            const mc = medalColor(i);
+                            const grade = r.pct >= 90 ? "A+" : r.pct >= 80 ? "A" : r.pct >= 70 ? "B+" : r.pct >= 60 ? "B" : r.pct >= 50 ? "C" : "D";
+                            return (
+                              <tr key={r.studentId + '_' + i} style={{ background: i % 2 === 0 ? "#fff" : "#F8FAFD", borderBottom: "1px solid #F0F4FA" }}>
+                                <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                                  <div style={{ width: 30, height: 30, borderRadius: 8, display: "inline-flex", alignItems: "center", justifyContent: "center", background: mc ? mc + "20" : "#F0F4FA", color: mc || "#6B7F99", fontWeight: 900, fontSize: ".8rem" }}>
+                                    {mc ? <i className="fas fa-medal" /> : i + 1}
+                                  </div>
+                                </td>
+                                <td style={{ padding: "10px 14px", fontWeight: 700, color: "#0B1826" }}>{r.studentName}</td>
+                                <td style={{ padding: "10px 14px", fontSize: ".75rem", color: "#6B7F99" }}>{r.studentClass}</td>
+                                {rankType === "exam" && subjectView === "overall" && subjectList.map(sub => (
+                                  <td key={sub} style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700 }}>{r.marks?.[sub] ?? "—"}</td>
+                                ))}
+                                {rankType === "exam" && subjectView !== "overall" && (
+                                  <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, fontSize: "1rem", color: "#1349A8" }}>{r.marks?.[subjectView] ?? "—"}</td>
+                                )}
+                                {rankType === "online_test" && (
+                                  <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 700 }}>{r.score}/{r.total}</td>
+                                )}
+                                <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                                  <span style={{ background: pctColor(r.pct) + "15", color: pctColor(r.pct), padding: "3px 10px", borderRadius: 20, fontWeight: 800, fontSize: ".78rem" }}>{r.pct}%</span>
+                                </td>
+                                <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, color: pctColor(r.pct) }}>{grade}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Summary Footer */}
+                    <div style={{ padding: "12px 18px", background: "#F8FAFD", borderTop: "1px solid #E8EFF8", display: "flex", gap: 24, flexWrap: "wrap" }}>
+                      {[
+                        { label: "Top Score", val: rankings[0] ? `${rankings[0].pct}% — ${rankings[0].studentName}` : "—", color: "#D4A843" },
+                        { label: "Average %", val: rankings.length > 0 ? `${Math.round(rankings.reduce((s, r) => s + r.pct, 0) / rankings.length)}%` : "—", color: "#1349A8" },
+                        { label: "Pass (≥40%)", val: rankings.filter(r => r.pct >= 40).length, color: "#059669" },
+                        { label: "Fail (<40%)", val: rankings.filter(r => r.pct < 40).length, color: "#DC2626" },
+                      ].map((stat, i) => (
+                        <div key={i}>
+                          <div style={{ fontSize: ".68rem", fontWeight: 600, color: "#6B7F99" }}>{stat.label}</div>
+                          <div style={{ fontSize: ".88rem", fontWeight: 800, color: stat.color }}>{stat.val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return <RankTab />;
+        })()}
+
         {tab === "leave_alerts" && (() => {
           const today = new Date().toISOString().split("T")[0];
 
           // Teachers on leave today
-          const teachersOnLeaveToday = teacherLeaves.filter(lv =>
-            lv.fromDate <= today && (lv.toDate || lv.fromDate) >= today
-          );
-
+          const normalizeDate = (d) => {
+  if (!d) return "";
+  if (d.includes("-")) return d; // already YYYY-MM-DD
+  const [dd, mm, yyyy] = d.split("/");
+  return `${yyyy}-${mm}-${dd}`;
+};
+const teachersOnLeaveToday = teacherLeaves.filter(lv => {
+  const from = normalizeDate(lv.fromDate);
+  const to = normalizeDate(lv.toDate || lv.fromDate);
+  return from <= today && to >= today;
+});
           // Students on leave today
           const studentsOnLeaveToday = leaveApplications.filter(lv => lv.date === today);
 
           // All upcoming teacher leaves (future)
-          const upcomingTeacherLeaves = teacherLeaves.filter(lv => lv.fromDate > today).slice(0, 10);
+          const upcomingTeacherLeaves = teacherLeaves.filter(lv => normalizeDate(lv.fromDate) > today).slice(0, 10);
 
           // Recent student leaves (last 7 days)
           const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -2637,7 +3014,9 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                       </div>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 800, fontSize: ".9rem", color: "#92400E" }}>{lv.teacherName}</div>
-                        <div style={{ fontSize: ".72rem", color: "#B45309" }}>{lv.teacherSubject || "—"}</div>
+                        <div style={{ fontSize: ".72rem", color: "#B45309" }}>
+  {(() => { const t = teachers.find(tc => tc.email === lv.teacherEmail || tc.name === lv.teacherName); return t?.subject || "—"; })()}
+</div>
                         <div style={{ fontSize: ".7rem", color: "#78350F", marginTop: 2 }}>
                           <i className="fas fa-calendar-alt" style={{ marginRight: 4 }} />
                           {lv.fromDate}{lv.toDate && lv.toDate !== lv.fromDate ? ` → ${lv.toDate}` : ""} · {days} din
@@ -2703,7 +3082,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                           <span style={{ color: "#fff", fontWeight: 800, fontSize: ".85rem" }}>{(lv.teacherName || "T").charAt(0)}</span>
                         </div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 700, fontSize: ".85rem" }}>{lv.teacherName} <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>· {lv.teacherSubject || "—"}</span></div>
+                          <div style={{ fontWeight: 700, fontSize: ".85rem" }}>{lv.teacherName} <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>· {(() => { const t = teachers.find(tc => tc.email === lv.teacherEmail || tc.name === lv.teacherName); return t?.subject || "—"; })()}</span></div>
                           <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>
                             {lv.fromDate}{lv.toDate && lv.toDate !== lv.fromDate ? ` → ${lv.toDate}` : ""} · {days} din
                           </div>
@@ -4290,10 +4669,10 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
                           {(() => {
                             const tLeave = teacherLeaves.find(lv =>
-                              lv.teacherId === t.id &&
-                              lv.fromDate <= attDate &&
-                              (lv.toDate || lv.fromDate) >= attDate
-                            );
+  (lv.teacherEmail === t.email || lv.teacherName === t.name) &&
+  lv.fromDate <= attDate &&
+  (lv.toDate || lv.fromDate) >= attDate
+);
                             if (isHol) return <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>;
                             if (tPresent) return <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>;
                             if (tLeave) return (
@@ -4976,11 +5355,12 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                 <div><label style={s.label}>Date *</label><input style={s.input} type="date" value={notifForm.date || ""} onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} /></div>
                 <div><label style={s.label}>Time to Send</label><input style={s.input} type="time" value={notifForm.time || ""} onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} /></div>
-                <div><label style={s.label}>Send To</label>
+                <div><label style={s.label}>Send To (Students)</label>
                   <select style={s.input} value={notifForm.target || "all"} onChange={e => setNotifForm({ ...notifForm, target: e.target.value })}>
                     <option value="all">All Students & Parents</option>
                     <option value="students">All Students Only</option>
                     <option value="parents">All Parents Only</option>
+                    <option value="teachers_all">🏫 All Teachers Only</option>
                     <optgroup label="Class 12th">
                       {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
                     </optgroup>
@@ -5001,6 +5381,35 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                     </optgroup>
                   </select>
                 </div>
+              </div>
+              {/* ═══ TEACHER NOTIFICATION SECTION ═══ */}
+              <div style={{ background: "#FAF5FF", borderRadius: 10, border: "1px solid #E9D5FF", padding: "12px 14px", marginBottom: 4 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: notifForm.sendToTeachers ? 10 : 0 }}>
+                  <input type="checkbox" checked={notifForm.sendToTeachers || false}
+                    onChange={e => setNotifForm({ ...notifForm, sendToTeachers: e.target.checked, teacherTarget: "all" })}
+                    style={{ width: 16, height: 16, accentColor: "#7C3AED" }} />
+                  <span style={{ fontSize: ".82rem", fontWeight: 700, color: "#7C3AED" }}>
+                    <i className="fas fa-chalkboard-teacher" style={{ marginRight: 6 }} />Teachers ko bhi yahi notification bhejo
+                  </span>
+                </label>
+                {notifForm.sendToTeachers && (
+                  <div>
+                    <label style={s.label}>Kaun se Teacher(s) ko bhejo?</label>
+                    <select style={s.input} value={notifForm.teacherTarget || "all"}
+                      onChange={e => setNotifForm({ ...notifForm, teacherTarget: e.target.value })}>
+                      <option value="all">All Teachers (Sabhi)</option>
+                      {teachers.map(t => (
+                        <option key={t.id} value={t.email || t.id}>
+                          {t.name} — {t.subject}
+                        </option>
+                      ))}
+                    </select>
+                    <p style={{ fontSize: ".7rem", color: "#7C3AED", margin: "-6px 0 0" }}>
+                      <i className="fas fa-info-circle" style={{ marginRight: 4 }} />
+                      Ye notification Teacher App mein bell icon pe dikhega
+                    </p>
+                  </div>
+                )}
               </div>
               <div><label style={s.label}>Notification Type</label>
                 <select style={s.input} value={notifForm.notifType || ""} onChange={e => {
@@ -5103,9 +5512,12 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi holiday add nahi hua abhi tak. Calendar me click karo ya "Add Holiday" button use karo.</p>}
           </div>
 
-          {/* Notification List */}
+          {/* Student/Parent Notification List */}
           <div style={{ ...s.card }}>
-            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}><i className="fas fa-bell" style={{ marginRight: 6, color: "#D98D04" }} />Scheduled Notifications ({notifications.length})</h3>
+            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}>
+              <i className="fas fa-bell" style={{ marginRight: 6, color: "#D98D04" }} />
+              Student/Parent Notifications ({notifications.length})
+            </h3>
             {notifications.length > 0 ? notifications.map(n => (
               <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #E8EFF8" }}>
                 <div style={{ width: 44, textAlign: "center" }}>
@@ -5124,7 +5536,110 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                   <button onClick={() => deleteNotification(n.id)} style={s.btnD}><i className="fas fa-trash" /></button>
                 </div>
               </div>
-            )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi notification scheduled nahi hai. "Schedule Notification" button use karo.</p>}
+            )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi notification scheduled nahi hai.</p>}
+          </div>
+
+          {/* ═══ TEACHER NOTIFICATIONS LIST ═══ */}
+          <div style={{ ...s.card, border: "1px solid #E9D5FF" }}>
+            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}>
+              <i className="fas fa-chalkboard-teacher" style={{ marginRight: 6, color: "#7C3AED" }} />
+              Teacher Notifications ({teacherNotifications.length})
+            </h3>
+
+            {/* Edit Form — inline */}
+            {notifForm.editTeacherId && (
+              <div style={{ background: "#FAF5FF", borderRadius: 10, border: "2px solid #7C3AED", padding: 14, marginBottom: 14 }}>
+                <h4 style={{ fontSize: ".88rem", fontWeight: 700, color: "#7C3AED", marginBottom: 10 }}>
+                  <i className="fas fa-edit" style={{ marginRight: 6 }} />Teacher Notification Edit Karo
+                </h4>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <div>
+                    <label style={s.label}>Scheduled Date</label>
+                    <input style={s.input} type="date" value={notifForm.date || ""}
+                      onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} />
+                  </div>
+                  <div>
+                    <label style={s.label}>Time</label>
+                    <input style={s.input} type="time" value={notifForm.time || ""}
+                      onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} />
+                  </div>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <label style={s.label}>Type</label>
+                  <select style={s.input} value={notifForm.notifType || "general"}
+                    onChange={e => setNotifForm({ ...notifForm, notifType: e.target.value })}>
+                    <option value="general">General</option>
+                    <option value="holiday">Holiday</option>
+                    <option value="exam">Exam</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <label style={s.label}>Teacher</label>
+                  <select style={s.input} value={notifForm.teacherTarget || "all"}
+                    onChange={e => setNotifForm({ ...notifForm, teacherTarget: e.target.value })}>
+                    <option value="all">All Teachers</option>
+                    {teachers.map(t => (
+                      <option key={t.id} value={t.email || t.id}>{t.name} — {t.subject}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={s.label}>Message *</label>
+                  <textarea style={{ ...s.input, height: 70, resize: "none" }}
+                    value={notifForm.message || ""}
+                    onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={saveTeacherNotification} disabled={saving} style={s.btnP}>
+                    <i className="fas fa-save" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Update Karo"}
+                  </button>
+                  <button onClick={() => setNotifForm({})} style={s.btnGray}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {teacherNotifications.length > 0 ? teacherNotifications.map(n => {
+              const typeColor = { holiday: "#16A34A", exam: "#1349A8", urgent: "#DC2626", general: "#7C3AED" }[n.type] || "#7C3AED";
+              const typeBg = { holiday: "#F0FDF4", exam: "#EFF6FF", urgent: "#FEF2F2", general: "#FAF5FF" }[n.type] || "#FAF5FF";
+              return (
+                <div key={n.id} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 0", borderBottom: "1px solid #F3E8FF" }}>
+                  {/* Type color dot */}
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: typeColor, flexShrink: 0, marginTop: 5 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: ".86rem", marginBottom: 4 }}>{n.message}</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      {n.type && <span style={s.badge(typeColor, typeBg)}>{n.type}</span>}
+                      <span style={{ fontSize: ".7rem", color: "#6B7F99" }}>
+                        <i className="fas fa-user" style={{ marginRight: 3 }} />
+                        {n.forTeacher === "all" ? "All Teachers" : (teachers.find(t => t.email === n.forTeacher || t.id === n.forTeacher)?.name || n.forTeacher)}
+                      </span>
+                      {n.scheduledDate && (
+                        <span style={{ fontSize: ".7rem", color: "#6B7F99" }}>
+                          <i className="fas fa-calendar" style={{ marginRight: 3 }} />{n.scheduledDate} {n.scheduledTime || ""}
+                        </span>
+                      )}
+                      <span style={{ fontSize: ".7rem", color: "#B0C4DC" }}>{timeAgo(n.createdAt)}</span>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button onClick={() => setNotifForm({
+                      editTeacherId: n.id,
+                      message: n.message,
+                      notifType: n.type || "general",
+                      date: n.scheduledDate || "",
+                      time: n.scheduledTime || "",
+                      teacherTarget: n.forTeacher || "all",
+                    })} style={s.btnO}><i className="fas fa-edit" /></button>
+                    <button onClick={() => deleteTeacherNotification(n.id)} style={s.btnD}><i className="fas fa-trash" /></button>
+                  </div>
+                </div>
+              );
+            }) : (
+              <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>
+                Koi teacher notification nahi hai. "Schedule Notification" me "All Teachers Only" select karke bhejo.
+              </p>
+            )}
           </div>
         </>}
 

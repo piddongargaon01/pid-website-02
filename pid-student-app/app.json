@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "PID Student App",
+    "slug": "pid-student-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "pidstudentapp",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1B1464"
+    },
+    "android": {
+      "softwareKeyboardLayoutMode": "pan",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#1B1464"
+      },
+      "package": "com.pid.studentapp",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "INTERNET",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "extra": {
+      "eas": {
+        "projectId": "817e87ac-d9f5-4d4e-ac43-86ef99b5141d"
+      }
+    },
+    "owner": "piddongargaon",
+    "plugins": [
+      "expo-web-browser",
+      "expo-image-picker",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#1B1464",
+          "defaultChannel": "default"
+        }
+      ]
+    ],
+    "androidStatusBar": {
+      "backgroundColor": "#1B1464"
+    }
+  }
+}

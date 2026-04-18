@@ -20,6 +20,13 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <head>
+          <link rel="manifest" href="/manifest.json" />
+          <meta name="theme-color" content="#1B1464" />
+          <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+          <meta name="apple-mobile-web-app-capable" content="yes" />
+          <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+          <meta name="apple-mobile-web-app-title" content="PID" />
+        
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
         {/* Preconnect to fonts to improve loading speed */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />

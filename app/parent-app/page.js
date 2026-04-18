@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { db, auth, googleProvider } from "../firebase";
 import { collection, query, where, onSnapshot, getDocs, orderBy, addDoc, serverTimestamp } from "firebase/firestore";
-import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
+import { signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "firebase/auth";
 
 // ─── ICONS (SVG inline) ──────────────────────────────────────────────────────
 const Icon = ({ name, size = 20, color = "currentColor" }) => {
@@ -84,14 +84,10 @@ const LoginScreen = ({ onLogin, loading: authLoading }) => {
     setLoading(true);
     setError("");
     try {
-      await signInWithPopup(auth, googleProvider);
-      // onAuthStateChanged will handle the rest
+      await signInWithRedirect(auth, googleProvider);
+      // Page will redirect, onAuthStateChanged will handle the rest after return
     } catch (e) {
-      if (e.code === "auth/popup-closed-by-user") {
-        setError("Login cancelled. Try again.");
-      } else {
-        setError("Login failed: " + e.message);
-      }
+      setError("Login failed: " + e.message);
       setLoading(false);
     }
   };
@@ -1056,6 +1052,15 @@ export default function ParentApp() {
       setAuthLoading(false);
     });
     return () => unsub();
+  }, []);
+
+  // ═══ HANDLE GOOGLE REDIRECT RESULT (for Capacitor WebView) ═══
+  useEffect(() => {
+    getRedirectResult(auth).then(result => {
+      if (result?.user) {
+        setUser(result.user);
+      }
+    }).catch(err => console.log("Redirect result error:", err));
   }, []);
 
   // ═══ FIND STUDENT BY PARENT EMAIL ═══

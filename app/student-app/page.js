@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db, auth, googleProvider } from "../firebase";
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, deleteDoc, serverTimestamp } from "firebase/firestore";
-import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
+import { signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "firebase/auth";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // ═══════════════════════════════════════════
@@ -33,7 +33,7 @@ export default function StudentApp() {
   const [loading, setLoading] = useState(true);
   const [student, setStudent] = useState(null);
   const [studentLoading, setStudentLoading] = useState(false);
-  const [loginRole, setLoginRole] = useState(null); // "student" | "teacher" | null
+  const [loginRole, setLoginRole] = useState(() => { try { return localStorage.getItem("pid_login_role") || null; } catch(e) { return null; } }); // "student" | "teacher" | null
   // ── Teacher State ──
   const [teacher, setTeacher] = useState(null);
   const [teacherLoading, setTeacherLoading] = useState(false);
@@ -140,6 +140,15 @@ export default function StudentApp() {
     return () => u();
   }, []);
 
+  // Handle Google redirect result (for Capacitor WebView)
+  useEffect(() => {
+    getRedirectResult(auth).then(result => {
+      if (result?.user) {
+        setUser(result.user);
+      }
+    }).catch(err => console.log("Redirect result error:", err));
+  }, []);
+
   // Auto-detect language from student medium
   useEffect(() => {
     if (student?.medium) {
@@ -177,6 +186,7 @@ export default function StudentApp() {
           setTeacher(null);
           alert("Aapka email teacher list mein nahi hai. Admin se contact karo.");
           signOut(auth);
+          localStorage.removeItem("pid_login_role");
           setLoginRole(null);
         }
         setTeacherLoading(false);
@@ -656,11 +666,11 @@ ${hist ? `═══ CONVERSATION SO FAR ═══\n${hist}\n\n` : ""}Student ask
         <p style={{ color: "#D4A843", fontSize: ".85rem", fontWeight: 700, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "2px" }}>Patel Institute Dongargaon</p>
         <p style={{ color: "#6B7F99", fontSize: ".85rem", marginBottom: 28, lineHeight: 1.6 }}>Login karo apni registered Gmail ID se</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <button onClick={() => { setLoginRole("student"); if (!user) signInWithPopup(auth, googleProvider).catch(console.log); }}
+          <button onClick={() => { setLoginRole("student"); localStorage.setItem("pid_login_role", "student"); if (!user) signInWithRedirect(auth, googleProvider).catch(console.log); }}
             style={{ width: "100%", padding: "16px", borderRadius: 16, background: "#E8EDF5", color: "#0C1F36", border: "none", fontSize: "1rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
             <I n="user-graduate" s={20} c="#1349A8" /> Student Login
           </button>
-          <button onClick={() => { setLoginRole("teacher"); if (!user) signInWithPopup(auth, googleProvider).catch(console.log); }}
+          <button onClick={() => { setLoginRole("teacher"); localStorage.setItem("pid_login_role", "teacher"); if (!user) signInWithRedirect(auth, googleProvider).catch(console.log); }}
             style={{ width: "100%", padding: "16px", borderRadius: 16, background: "transparent", color: "#D4A843", border: "2px solid #D4A843", fontSize: "1rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
             <I n="chalkboard-teacher" s={20} c="#D4A843" /> Teacher Login
           </button>
@@ -690,7 +700,7 @@ ${hist ? `═══ CONVERSATION SO FAR ═══\n${hist}\n\n` : ""}Student ask
             </div>
             <div><h3 style={{ margin: 0, fontSize: ".95rem", fontWeight: 800, color: "#E8EDF5" }}>{teacher.name}</h3><p style={{ margin: 0, fontSize: ".65rem", color: "#6B7F99" }}>{teacher.subject} · {teacher.classes || "All Classes"}</p></div>
           </div>
-          <button onClick={() => { signOut(auth); setLoginRole(null); setTeacher(null); }} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.15)", color: "#9FB8CF", padding: "6px 12px", borderRadius: 8, fontSize: ".72rem", cursor: "pointer" }}>Logout</button>
+          <button onClick={() => { localStorage.removeItem("pid_login_role"); signOut(auth); setLoginRole(null); setTeacher(null); }} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.15)", color: "#9FB8CF", padding: "6px 12px", borderRadius: 8, fontSize: ".72rem", cursor: "pointer" }}>Logout</button>
         </div>
 
         {/* Teacher Tabs */}
@@ -1240,7 +1250,7 @@ ${hist ? `═══ CONVERSATION SO FAR ═══\n${hist}\n\n` : ""}Student ask
     <div style={{ height: "100vh", background: "#0B1120", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
       <I n="exclamation-triangle" s={40} c="#D4A843" />
       <p style={{ color: "#E8EDF5", fontWeight: 600, marginTop: 16 }}>Profile not found</p>
-      <button onClick={() => { signOut(auth); setLoginRole(null); }} style={{ marginTop: 12, padding: "10px 24px", borderRadius: 12, background: "#D4A843", color: "#0C1F36", border: "none", fontWeight: 700, cursor: "pointer" }}>Try Again</button>
+      <button onClick={() => { localStorage.removeItem("pid_login_role"); signOut(auth); setLoginRole(null); }} style={{ marginTop: 12, padding: "10px 24px", borderRadius: 12, background: "#D4A843", color: "#0C1F36", border: "none", fontWeight: 700, cursor: "pointer" }}>Try Again</button>
     </div>
   );
 
@@ -1288,7 +1298,7 @@ ${hist ? `═══ CONVERSATION SO FAR ═══\n${hist}\n\n` : ""}Student ask
             <button onClick={() => setDark(!dark)} style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: dark ? "#D4A843" : "#9FB8CF", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <I n={dark ? "sun" : "moon"} s={14} />
             </button>
-            <div onClick={() => signOut(auth)} style={{ width: 34, height: 34, borderRadius: 10, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, cursor: "pointer", fontSize: ".85rem" }}>
+            <div onClick={() => { localStorage.removeItem("pid_login_role"); signOut(auth); setLoginRole(null); }} style={{ width: 34, height: 34, borderRadius: 10, background: `linear-gradient(135deg, ${T.accent}, #2563EB)`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, cursor: "pointer", fontSize: ".85rem" }}>
               {student.studentName.charAt(0).toUpperCase()}
             </div>
           </div>
@@ -2543,7 +2553,7 @@ Now, teach me: [TYPE YOUR TOPIC HERE]`}
               </div>
 
               {/* Logout */}
-              <button onClick={() => signOut(auth)} style={{ width: "100%", padding: "14px", borderRadius: 14, border: `1px solid ${T.danger}`, background: dark ? "rgba(239,68,68,.08)" : "rgba(220,38,38,.06)", color: T.danger, fontSize: ".88rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><I n="sign-out-alt" s={14} /> Logout</button>
+              <button onClick={() => { localStorage.removeItem("pid_login_role"); signOut(auth); setLoginRole(null); }} style={{ width: "100%", padding: "14px", borderRadius: 14, border: `1px solid ${T.danger}`, background: dark ? "rgba(239,68,68,.08)" : "rgba(220,38,38,.06)", color: T.danger, fontSize: ".88rem", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><I n="sign-out-alt" s={14} /> Logout</button>
             </div>
           )}
 
