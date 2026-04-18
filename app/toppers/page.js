@@ -147,36 +147,82 @@ export default function ToppersPage() {
               </div>
             </div>
 
-            {featuredToppers.length > 0 ? (
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:16}}>
-                {featuredToppers.map((t, i) => (
-                  <div key={t.id} style={{background:"#fff",borderRadius:14,overflow:"hidden",border:"1px solid #D4DEF0",transition:"all .25s",cursor:"default"}}
-                    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-4px)";e.currentTarget.style.boxShadow="0 12px 32px rgba(7,41,107,.1)";}}
-                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
-                    {/* Photo */}
-                    <div style={{height:220,background:`linear-gradient(135deg,${colors[i%6]},${colors[(i+2)%6]})`,position:"relative",overflow:"hidden"}}>
-                      {t.photo ? (
-                        <img src={t.photo} alt={t.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-                      ) : (
-                        <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          <i className="fas fa-user-graduate" style={{fontSize:"3rem",color:"rgba(255,255,255,.2)"}}/>
-                        </div>
-                      )}
-                      {/* Percentage Badge */}
-                      {t.percentage && <div style={{position:"absolute",top:10,right:10,background:"#F5AC10",color:"#fff",padding:"4px 12px",borderRadius:99,fontSize:".78rem",fontWeight:700,boxShadow:"0 2px 8px rgba(0,0,0,.2)"}}>{t.percentage}</div>}
-                      {/* Rank Badge */}
-                      {t.rank && <div style={{position:"absolute",bottom:10,left:10,background:"rgba(0,0,0,.55)",color:"#fff",padding:"3px 10px",borderRadius:99,fontSize:".68rem",fontWeight:600,backdropFilter:"blur(4px)"}}>{t.rank}</div>}
+            {featuredToppers.length > 0 ? (() => {
+  // Year-wise group
+  const yg = {};
+  featuredToppers.forEach(t => {
+    const yr = t.year || "Other";
+    if (!yg[yr]) yg[yr] = [];
+    yg[yr].push(t);
+  });
+  const sortedYrs = Object.keys(yg).sort((a, b) => b.localeCompare(a));
+  return (
+    <div>
+      {sortedYrs.map((yr, yi) => (
+        <div key={yr} style={{marginBottom: 32}}>
+          {/* Year Header */}
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+            <div style={{background:"linear-gradient(135deg,#062560,#1548B0)",color:"#fff",padding:"6px 20px",borderRadius:99,fontSize:".8rem",fontWeight:800,letterSpacing:.5,display:"flex",alignItems:"center",gap:7,boxShadow:"0 3px 10px rgba(6,37,96,.2)"}}>
+              <i className="fas fa-trophy" style={{color:"#FCD34D",fontSize:".75rem"}}/>
+              Batch {yr}
+            </div>
+            <div style={{flex:1,height:1,background:"linear-gradient(90deg,#C0D0E8,transparent)"}}/>
+            <span style={{fontSize:".72rem",color:"#6B7F99",fontWeight:600,background:"#EFF6FF",padding:"3px 10px",borderRadius:99,border:"1px solid #BFDBFE"}}>{yg[yr].length} Topper{yg[yr].length>1?"s":""}</span>
+          </div>
+          {/* Cards Grid */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:14}}>
+            {yg[yr].map((t, i) => (
+              <div key={t.id}
+                style={{background:"#fff",borderRadius:14,overflow:"hidden",border:"1px solid #D4DEF0",transition:"all .25s",cursor:"default"}}
+                onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-5px)";e.currentTarget.style.boxShadow="0 14px 36px rgba(7,41,107,.12)";e.currentTarget.style.borderColor="#BFDBFE";}}
+                onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";e.currentTarget.style.borderColor="#D4DEF0";}}>
+                {/* Photo — Portrait friendly, taller */}
+                <div style={{height:230,background:`linear-gradient(160deg,${colors[i%6]},${colors[(i+2)%6]})`,position:"relative",overflow:"hidden"}}>
+                  {t.photo ? (
+                    <img src={t.photo} alt={t.name}
+                      style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"top center"}}/>
+                  ) : (
+                    <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <i className="fas fa-user-graduate" style={{fontSize:"3.5rem",color:"rgba(255,255,255,.15)"}}/>
                     </div>
-                    {/* Info */}
-                    <div style={{padding:14}}>
-                      <div style={{fontFamily:"'Plus Jakarta Sans',sans-serif",fontWeight:700,fontSize:".9rem",color:"#0B1826",marginBottom:2}}>{t.name}</div>
-                      <div style={{fontSize:".74rem",color:"#4A5E78"}}>{t.class} · {t.board}</div>
-                      <div style={{fontSize:".72rem",color:"#6B7F99",marginTop:2}}>{t.year}</div>
+                  )}
+                  {/* Dark gradient overlay at bottom */}
+                  <div style={{position:"absolute",bottom:0,left:0,right:0,height:70,background:"linear-gradient(transparent,rgba(0,0,0,.65))"}}/>
+                  {/* Percentage Badge — top right */}
+                  {t.percentage && (
+                    <div style={{position:"absolute",top:10,right:10,background:"#F5AC10",color:"#fff",padding:"4px 11px",borderRadius:99,fontSize:".74rem",fontWeight:800,boxShadow:"0 2px 8px rgba(0,0,0,.25)",letterSpacing:.3}}>
+                      {t.percentage}
                     </div>
+                  )}
+                  {/* Rank — bottom overlay */}
+                  {t.rank && (
+                    <div style={{position:"absolute",bottom:8,left:10,right:10,fontSize:".63rem",color:"rgba(255,255,255,.92)",fontWeight:600,textAlign:"center",lineHeight:1.4}}>
+                      {t.rank}
+                    </div>
+                  )}
+                </div>
+                {/* Info */}
+                <div style={{padding:"11px 13px 12px"}}>
+                  <div style={{fontFamily:"'Plus Jakarta Sans',sans-serif",fontWeight:700,fontSize:".88rem",color:"#0B1826",marginBottom:3,lineHeight:1.3}}>{t.name}</div>
+                  <div style={{fontSize:".72rem",color:"#4A5E78",display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                    {t.class && <span style={{background:"#EFF6FF",color:"#1349A8",padding:"1px 8px",borderRadius:99,fontWeight:600}}>{t.class}</span>}
+                    {t.board && <span style={{color:"#6B7F99"}}>{t.board}</span>}
                   </div>
-                ))}
+                </div>
               </div>
-            ) : (
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+})() : (
+  <div style={{background:"#fff",borderRadius:14,border:"2px dashed #D4DEF0",padding:"32px 20px",textAlign:"center"}}>
+    <i className="fas fa-camera" style={{fontSize:"2rem",color:"#B0C4DC",marginBottom:10}}/>
+    <h4 style={{fontSize:".92rem",fontWeight:700,color:"#4A5E78",marginBottom:4}}>Topper Photos Coming Soon</h4>
+    <p style={{fontSize:".78rem",color:"#6B7F99"}}>Featured toppers with photos will be added by admin from the Admin Panel.</p>
+  </div>
+)}
               <div style={{background:"#fff",borderRadius:14,border:"2px dashed #D4DEF0",padding:"32px 20px",textAlign:"center"}}>
                 <i className="fas fa-camera" style={{fontSize:"2rem",color:"#B0C4DC",marginBottom:10}}/>
                 <h4 style={{fontSize:".92rem",fontWeight:700,color:"#4A5E78",marginBottom:4}}>Topper Photos Coming Soon</h4>
