@@ -103,6 +103,7 @@ export async function GET(req) {
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
+}
 export async function POST(req) {
   try {
     const { notifId, secret } = await req.json();
