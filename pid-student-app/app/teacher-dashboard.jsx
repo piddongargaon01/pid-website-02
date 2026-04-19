@@ -762,6 +762,7 @@ const unsub = onAuthStateChanged(auth, user => {
           sentBy: teacher?.name || 'Teacher',
           teacherId: teacher?.id || '',
           teacherEmail: auth.currentUser?.email || '',
+          sent: false,
           createdAt: serverTimestamp(),
         });
         Alert.alert('Sent!', 'Notification bhej di gayi!');

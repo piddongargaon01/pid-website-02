@@ -1804,12 +1804,13 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             forTeacher: "all",
             targetType: "teacher",
             sentBy: "Admin",
+            sent: false,
             createdAt: serverTimestamp(),
           });
           showMsg("Notification sabhi Teachers ko bhej diya!");
         } else {
           // Students/Parents ke liye — scheduled_notifications me save karo
-          const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, createdAt: serverTimestamp() });
+          const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
           if (data.sendToTeachers) {
             const teacherNotifDoc = await addDoc(collection(db, "notifications"), {
               message: data.message,
@@ -1819,6 +1820,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
               forTeacher: data.teacherTarget || "all",
               targetType: "teacher",
               sentBy: "Admin",
+              sent: false,
               createdAt: serverTimestamp(),
             });
             await updateDoc(doc(db, "scheduled_notifications", newDoc.id), { teacherNotifDocId: teacherNotifDoc.id });
