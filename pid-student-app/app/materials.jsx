@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../firebase';
 import { useUnreadCount } from '../hooks/useUnreadCount';
+import { studentMatchesBatch } from '../utils/batchMatcher';
 
 function BottomNav({ active }) {
   const router = useRouter();
@@ -60,6 +61,7 @@ const SUBJECT_ICONS = {
 export default function Materials() {
   const router = useRouter();
   const [materials, setMaterials] = useState([]);
+  const [student, setStudent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('All');
@@ -67,9 +69,17 @@ export default function Materials() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, user => {
       if (!user) { router.replace('/'); return; }
-      onSnapshot(collection(db, 'study_materials'), s => {
-        setMaterials(s.docs.map(d => ({ id: d.id, ...d.data() })));
-        setLoading(false);
+
+      // Fetch student info
+      onSnapshot(collection(db, 'students'), s => {
+        const found = s.docs.find(d => d.data().studentEmail?.toLowerCase() === user.email?.toLowerCase());
+        if (found) setStudent({ id: found.id, ...found.data() });
+        
+        // Fetch materials
+        onSnapshot(collection(db, 'study_materials'), sm => {
+          setMaterials(sm.docs.map(d => ({ id: d.id, ...d.data() })));
+          setLoading(false);
+        });
       });
     });
     return unsub;
@@ -82,7 +92,8 @@ export default function Materials() {
       m.title?.toLowerCase().includes(search.toLowerCase()) ||
       m.chapter?.toLowerCase().includes(search.toLowerCase());
     const matchSubject = selectedSubject === 'All' || m.subject === selectedSubject;
-    return matchSearch && matchSubject;
+    const matchClass = !student || studentMatchesBatch(student, m.courseId);
+    return matchSearch && matchSubject && matchClass;
   });
 
   // Group by subject + chapter

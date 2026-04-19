@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../firebase';
+import { registerForPushNotifications } from '../utils/notifications';
 
 // ─── OTP Generator ───
 function generateOTP() {
@@ -69,8 +70,9 @@ async function sendOTPEmail(toEmail, toName, otpCode) {
 
 // ─── FCM Token Save Function ─── NEW
 async function saveFCMToken(userRole, userData) {
-  // Expo Go support nahi karta — APK build mein activate hoga
-  console.log('FCM: APK build mein token save hoga');
+  if (userData?.id) {
+    await registerForPushNotifications(userData.id, userRole);
+  }
 }
 
 export default function Login() {

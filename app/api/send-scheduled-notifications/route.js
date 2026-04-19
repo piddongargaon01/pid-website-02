@@ -67,6 +67,9 @@ export async function GET(req) {
           title: n.title || getTitleByType(n.notifType || n.type),
           body: n.message,
           sound: "default",
+          priority: "high",
+          channelId: "default",
+          ttl: 2419200,
           data: { type: n.notifType || n.type || "general", notifId: n.id },
         }));
 

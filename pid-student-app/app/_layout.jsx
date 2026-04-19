@@ -1,6 +1,19 @@
+import * as Notifications from "expo-notifications";
 import { Stack } from 'expo-router';
+import { useEffect } from "react";
+import { Alert } from "react-native";
 
 export default function Layout() {
+  useEffect(() => {
+    // ── Notification foreground listener ──
+    const subscription = Notifications.addNotificationReceivedListener(notification => {
+      const { title, body } = notification.request.content;
+      Alert.alert(title || "🔔 PID Notification", body);
+    });
+
+    return () => subscription.remove();
+  }, []);
+
   return (
     <Stack
       screenOptions={{

@@ -3492,8 +3492,29 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
               <div>
                 <label style={s.label}>Course / Class *</label>
                 <select style={s.input} value={form.courseId || ""} onChange={e => setForm({ ...form, courseId: e.target.value })}>
-                  <option value="">Select Course</option>
-                  {courses.map(c => <option key={c.id} value={c.classId || c.id}>{c.title} {c.tag ? `(${c.tag})` : ""}</option>)}
+                  <option value="">Select Course / Batch</option>
+                  <option value="all">All Students (General)</option>
+                  <optgroup label="Class 12th">
+                    {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Class 11th">
+                    {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Class 10th">
+                    {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Class 9th">
+                    {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Junior Classes">
+                    {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Entrance Coaching">
+                    {BATCH_OPTIONS.filter(b => b.class === "Navodaya" || b.class === "Prayas").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Competition Exam">
+                    {BATCH_OPTIONS.filter(b => b.class === "JEE-NEET").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
                 </select>
               </div>
               <div>
