@@ -69,14 +69,16 @@ export async function GET(req) {
           body: n.message,
           sound: "default",
           priority: "high",
-          channelId: "default",
+          channelId: "pid_alerts",
           vibrate: true,
           _displayInForeground: true, // For foreground popups
+          _contentAvailable: true,
           ttl: 2419200, // 4 weeks
           data: { 
             type: n.notifType || n.type || "general", 
             notifId: n.id,
-            displayInForeground: true 
+            displayInForeground: true,
+            channelId: "pid_alerts"
           },
         }));
 
@@ -137,10 +139,16 @@ export async function POST(req) {
       body: n.message,
       sound: "default",
       priority: "high",
-      channelId: "default",
+      channelId: "pid_alerts",
       vibrate: true,
       _displayInForeground: true,
-      data: { type: n.notifType || n.type || "general", notifId: n.id, displayInForeground: true },
+      _contentAvailable: true,
+      data: { 
+        type: n.notifType || n.type || "general", 
+        notifId: n.id, 
+        displayInForeground: true,
+        channelId: "pid_alerts"
+      },
     }));
 
     for (let i = 0; i < messages.length; i += 100) {
