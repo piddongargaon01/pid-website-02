@@ -69,8 +69,14 @@ export async function GET(req) {
           sound: "default",
           priority: "high",
           channelId: "default",
-          ttl: 2419200,
-          data: { type: n.notifType || n.type || "general", notifId: n.id },
+          vibrate: true,
+          _displayInForeground: true, // For foreground popups
+          ttl: 2419200, // 4 weeks
+          data: { 
+            type: n.notifType || n.type || "general", 
+            notifId: n.id,
+            displayInForeground: true 
+          },
         }));
 
         for (let i = 0; i < messages.length; i += 100) {
@@ -94,6 +100,56 @@ export async function GET(req) {
     }
 
     return NextResponse.json({ success: true, results, checkedAt: now.toISOString() });
+  } catch (e) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+export async function POST(req) {
+  try {
+    const { notifId, secret } = await req.json();
+    if (secret !== process.env.CRON_SECRET) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const db = getAdminDb();
+    // Try both collections
+    let docRef = db.collection("scheduled_notifications").doc(notifId);
+    let docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      docRef = db.collection("notifications").doc(notifId);
+      docSnap = await docRef.get();
+    }
+
+    if (!docSnap.exists) return NextResponse.json({ error: "Notification not found" }, { status: 404 });
+
+    const n = { id: docSnap.id, ...docSnap.data() };
+    const tokens = await getTargetTokens(db, n);
+
+    if (tokens.length === 0) return NextResponse.json({ error: "No target tokens found" });
+
+    const expoPushUrl = "https://exp.host/--/api/v2/push/send";
+    const messages = tokens.map(token => ({
+      to: token,
+      title: n.title || getTitleByType(n.notifType || n.type),
+      body: n.message,
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+      vibrate: true,
+      _displayInForeground: true,
+      data: { type: n.notifType || n.type || "general", notifId: n.id, displayInForeground: true },
+    }));
+
+    for (let i = 0; i < messages.length; i += 100) {
+      await fetch(expoPushUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(messages.slice(i, i + 100)),
+      });
+    }
+
+    await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount: tokens.length });
+    return NextResponse.json({ success: true, sentCount: tokens.length });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

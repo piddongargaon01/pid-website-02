@@ -1834,6 +1834,65 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     } catch (e) { showMsg("Error: " + e.message); }
     setSaving(false);
   }
+
+  async function sendImmediateNotification() {
+    if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
+    setSaving(true);
+    try {
+      const data = { ...notifForm, date: new Date().toISOString().split("T")[0], time: new Date().toLocaleTimeString("en-IN", { hour12: false, hour: "2-digit", minute: "2-digit" }) };
+      
+      // Save to Firebase first
+      const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
+      
+      // Trigger API for immediate send
+      const res = await fetch("/api/send-scheduled-notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          notifId: newDoc.id,
+          secret: "pid_cron_2026" // Using the standard secret
+        }),
+      });
+      
+      const result = await res.json();
+      if (result.success) {
+        showMsg(`Success! Push sent instantly to ${result.sentCount} devices 🚀`);
+        setShowNotifForm(false); setNotifForm({});
+      } else {
+        showMsg("API Error: " + (result.error || "Unknown error"));
+      }
+    } catch (e) { showMsg("System Error: " + e.message); }
+    setSaving(false);
+  }
+
+  async function testNotificationPopup() {
+    setSaving(true);
+    try {
+      const payload = {
+        message: "🚨 Test Alert: Notification system working properly!",
+        notifType: "urgent",
+        target: "all",
+        date: new Date().toISOString().split("T")[0]
+      };
+      
+      const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...payload, sent: false, createdAt: serverTimestamp() });
+      
+      const res = await fetch("/api/send-scheduled-notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notifId: newDoc.id, secret: "pid_cron_2026" }),
+      });
+      
+      const result = await res.json();
+      if (result.success) {
+        showMsg("Test sent! Check for popup on Android 🔔");
+      } else {
+        showMsg("Test Failed: " + result.error);
+      }
+    } catch (e) { showMsg("Err: " + e.message); }
+    setSaving(false);
+  }
+
   async function deleteNotification(id) {
     if (!confirm("Delete this notification?")) return;
     try { await deleteDoc(doc(db, "scheduled_notifications", id)); showMsg("Notification deleted!"); } catch (e) { showMsg("Error!"); }
@@ -2276,9 +2335,15 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                   <label style={s.label}>Message *</label>
                   <textarea style={{ ...s.input, height: 70, resize: "none" }} placeholder="e.g. Kal 10th class ka Science test hai 10:00 AM se..." value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} />
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={saveNotification} disabled={saving} style={{ ...s.btnP, display: "flex", alignItems: "center", gap: 6 }}>
-                    <i className="fas fa-paper-plane" />{saving ? "Sending..." : "Send Now"}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={sendImmediateNotification} disabled={saving} style={{ ...s.btnP, background: "linear-gradient(135deg,#DC2626,#EF4444)", display: "flex", alignItems: "center", gap: 6 }}>
+                    <i className="fas fa-bolt" />{saving ? "Sending..." : "Send Now (Urgent)"}
+                  </button>
+                  <button onClick={saveNotification} disabled={saving} style={{ ...s.btnGray, display: "flex", alignItems: "center", gap: 6 }}>
+                    <i className="fas fa-clock" />{saving ? "Scheduling..." : "Schedule Later"}
+                  </button>
+                  <button onClick={testNotificationPopup} disabled={saving} style={{ ...s.btnGray, background: "#F0F4FA" }}>
+                    <i className="fas fa-vial" style={{ marginRight: 6 }} />Test Popup
                   </button>
                   <button onClick={() => { setShowNotifForm(false); setNotifForm({}); }} style={s.btnGray}>Cancel</button>
                 </div>
@@ -5583,9 +5648,11 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                 </div>
               )}
 
-              <div><label style={s.label}>Message *</label><textarea style={{ ...s.input, height: 80, resize: "none" }} placeholder={notifForm.notifType === "fee" ? "e.g. Respected Parents, aapke bachche ki pending fees ₹{amount} hai. Kripya jald se jald jama karein. — Patel Institute Dongargaon" : "e.g. Kal 10th class ka Science test hai 10:00 AM se..."} value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} /></div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button onClick={saveNotification} disabled={saving} style={s.btnP}><i className="fas fa-paper-plane" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Schedule"}</button>
+               <div><label style={s.label}>Message *</label><textarea style={{ ...s.input, height: 80, resize: "none" }} placeholder={notifForm.notifType === "fee" ? "e.g. Respected Parents, aapke bachche ki pending fees ₹{amount} hai. Kripya jald se jald jama karein. — Patel Institute Dongargaon" : "e.g. Kal 10th class ka Science test hai 10:00 AM se..."} value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} /></div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={sendImmediateNotification} disabled={saving} style={{ ...s.btnP, background: "linear-gradient(135deg,#DC2626,#EF4444)" }}><i className="fas fa-bolt" style={{ marginRight: 6 }} />{saving ? "Sending..." : "Send Now"}</button>
+                <button onClick={saveNotification} disabled={saving} style={s.btnP}><i className="fas fa-clock" style={{ marginRight: 6 }} />{saving ? "Saving..." : "Schedule"}</button>
+                <button onClick={testNotificationPopup} disabled={saving} style={s.btnGray}><i className="fas fa-vial" style={{ marginRight: 6 }} />Test Popup</button>
                 <button onClick={() => { setShowNotifForm(false); setNotifForm({}); }} style={s.btnGray}>Cancel</button>
               </div>
             </div>
