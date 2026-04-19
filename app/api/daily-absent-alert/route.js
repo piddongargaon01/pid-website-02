@@ -1,4 +1,4 @@
-import { adminDb } from "../../lib/firebase-admin";
+import { adminDb } from "../../../lib/firebase-admin";
 
 export async function GET(request) {
   try {
@@ -17,6 +17,10 @@ export async function GET(request) {
     }
 
     // Active students lo
+    if (!adminDb) {
+      return Response.json({ error: "Database not initialized" }, { status: 500 });
+    }
+
     const studentsSnap = await adminDb.collection("students")
       .where("status", "==", "active")
       .get();

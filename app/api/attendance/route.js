@@ -1,35 +1,5 @@
 import { NextResponse } from "next/server";
-import admin from "firebase-admin";
-
-// ═══════════════════════════════════════════
-// CLEAN & SIMPLE FIREBASE INIT
-// ═══════════════════════════════════════════
-if (!admin.apps.length) {
-  try {
-    const envVar = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    
-    if (!envVar) {
-      console.error("❌ Error: FIREBASE_SERVICE_ACCOUNT_KEY is missing!");
-    } else {
-      // Vercel se aane wale raw JSON ko direct parse karna
-      const serviceAccount = JSON.parse(envVar.trim());
-
-      // Line breaks ko specifically check aur fix karna
-      if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-      }
-
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
-      console.log("✅ Firebase Admin Initialized Successfully");
-    }
-  } catch (error) {
-    console.error("❌ Firebase Admin Init Error:", error.message);
-  }
-}
-
-const db = admin.apps.length ? admin.firestore() : null;
+import { admin, adminDb as db } from "../../../lib/firebase-admin";
 
 // ═══════════════════════════════════════════
 // POST — RFID Device sends attendance data

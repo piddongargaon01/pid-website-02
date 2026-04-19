@@ -1,20 +1,8 @@
 import { NextResponse } from "next/server";
-import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { adminDb } from "../../../lib/firebase-admin";
 
-export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
-
-// ── Runtime pe initialize karo — build time pe nahi ──
 function getAdminDb() {
-  if (!getApps().length) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY not set");
-    const sa = JSON.parse(raw);
-    sa.private_key = sa.private_key.replace(/\\n/g, '\n');
-    initializeApp({ credential: cert(sa) });
-  }
-  return getFirestore();
+  return adminDb;
 }
 
 export async function GET(req) {
@@ -28,6 +16,9 @@ export async function GET(req) {
 
   try {
     const db = getAdminDb();
+    if (!db) {
+      return NextResponse.json({ error: "Firebase not initialized" }, { status: 500 });
+    }
 
     const snap = await db.collection("scheduled_notifications")
       .where("sent", "!=", true)
