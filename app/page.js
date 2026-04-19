@@ -299,7 +299,55 @@ export default function Home() {
 <section id="results" className="spad" style={{background:"#fff"}}>
 <div className="wrap">
 <div className="tc rv" style={{marginBottom:36}}><span className="stag">Our Pride</span><h2 className="stitle">Our Toppers & Results</h2><div className="sbar c"/><p className="ssub">Celebrating excellence and achievements of our brilliant students</p></div>
-{toppers.length>0?<div className="g4 rv">{toppers.slice(0,4).map((t,i)=><div className="card tpc" key={t.id}><div className="tpi" style={{background:`linear-gradient(135deg,${colors[i%4]},${["#2A6FE0","#F5AC10","#4ADE80","#A78BFA"][i%4]})`}}>{t.photo?<img src={t.photo} alt={t.name}/>:<i className="fas fa-user-graduate" style={{fontSize:"2.5rem",color:"rgba(255,255,255,.25)"}}/>}<span className="tpct">{t.percentage}</span>{t.rank&&<span className="tptg">{t.rank}</span>}</div><div className="tpb"><div className="tpn">{t.name}</div><div className="tpcl">{t.class} · {t.board} {t.year}</div></div></div>)}</div>:<div className="empty-state rv"><i className="fas fa-trophy"/><h4>Toppers Coming Soon</h4><p>Featured toppers will be added by admin from the Admin Panel.</p></div>}
+{toppers.length>0?(()=>{
+  // Year-wise group karo
+  const yearGroups={};
+  toppers.forEach(t=>{
+    const yr=t.year||"Other";
+    if(!yearGroups[yr])yearGroups[yr]=[];
+    yearGroups[yr].push(t);
+  });
+  const sortedYears=Object.keys(yearGroups).sort((a,b)=>b.localeCompare(a));
+  return(
+    <div className="rv">
+      {sortedYears.slice(0,3).map((yr,yi)=>(
+        <div key={yr} style={{marginBottom:28}}>
+          {/* Year Badge */}
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+            <div style={{background:"linear-gradient(135deg,var(--navy),var(--blue))",color:"#fff",padding:"5px 18px",borderRadius:99,fontSize:".78rem",fontWeight:800,letterSpacing:1,boxShadow:"0 2px 8px rgba(19,73,168,.2)"}}>
+              <i className="fas fa-calendar-alt" style={{marginRight:6,color:"#FCD34D"}}/>Batch {yr}
+            </div>
+            <div style={{flex:1,height:1,background:"linear-gradient(90deg,#D4DEF0,transparent)"}}/>
+            <span style={{fontSize:".72rem",color:"var(--t3)",fontWeight:600}}>{yearGroups[yr].length} Topper{yearGroups[yr].length>1?"s":""}</span>
+          </div>
+          {/* Toppers Row */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:14}}>
+            {yearGroups[yr].map((t,i)=>(
+              <div className="card tpc-new" key={t.id} style={{borderRadius:14,overflow:"hidden",border:"1px solid #D4DEF0",background:"#fff",boxShadow:"0 2px 12px rgba(7,41,107,.06)"}}>
+                {/* Photo Box — Portrait friendly */}
+                <div style={{height:200,background:`linear-gradient(135deg,${colors[i%4]},${["#2A6FE0","#F5AC10","#4ADE80","#A78BFA"][i%4]})`,position:"relative",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {t.photo
+                    ?<img src={t.photo} alt={t.name} style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"top center"}}/>
+                    :<i className="fas fa-user-graduate" style={{fontSize:"3rem",color:"rgba(255,255,255,.18)"}}/>
+                  }
+                  {/* Percentage Badge */}
+                  {t.percentage&&<div style={{position:"absolute",top:8,right:8,background:"#F5AC10",color:"#fff",padding:"3px 10px",borderRadius:99,fontSize:".72rem",fontWeight:800,boxShadow:"0 2px 6px rgba(0,0,0,.2)"}}>{t.percentage}</div>}
+                  {/* Rank Badge */}
+                  {t.rank&&<div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,.7))",padding:"20px 8px 8px",fontSize:".64rem",color:"#fff",fontWeight:600,textAlign:"center"}}>{t.rank}</div>}
+                </div>
+                {/* Info */}
+                <div style={{padding:"10px 12px"}}>
+                  <div style={{fontWeight:700,fontSize:".86rem",color:"var(--t1)",marginBottom:2,lineHeight:1.3}}>{t.name}</div>
+                  <div style={{fontSize:".7rem",color:"var(--t3)"}}>{t.class}{t.board?` · ${t.board}`:""}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+})():<div className="empty-state rv"><i className="fas fa-trophy"/><h4>Toppers Coming Soon</h4><p>Featured toppers will be added by admin from the Admin Panel.</p></div>}
 <div className="tc rv" style={{marginTop:24}}><Link href="/toppers" className="btn bp">View All Toppers — Year Wise <i className="fas fa-arrow-right"/></Link></div>
 <div className="rstats rv">{[{n:"99%",l:"Pass Rate",bg:"linear-gradient(135deg,#DBEAFE,#BFDBFE)",c:"var(--navy)"},{n:"50+",l:"Toppers Overall",bg:"linear-gradient(135deg,#FEF3C7,#FDE68A)",c:"#92400E"},{n:"5000+",l:"Students Taught",bg:"linear-gradient(135deg,#DCFCE7,#BBF7D0)",c:"#166534"},{n:"10+",l:"Expert Faculty",bg:"linear-gradient(135deg,#EDE9FE,#DDD6FE)",c:"#4C1D95"}].map((s,i)=><div className="rs" key={i} style={{background:s.bg}}><div className="rn" style={{color:s.c}}>{s.n}</div><div className="rl">{s.l}</div></div>)}</div>
 </div>

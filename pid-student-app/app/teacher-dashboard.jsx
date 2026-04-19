@@ -625,7 +625,8 @@ export default function TeacherDashboard() {
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const listeners = [];
+const unsub = onAuthStateChanged(auth, user => {
       if (!user) { router.replace('/'); return; }
 
       onSnapshot(collection(db, 'teachers'), s => {
@@ -1690,8 +1691,10 @@ export default function TeacherDashboard() {
               </View>
 
               <TouchableOpacity style={styles.logoutBtn} onPress={async () => {
-                await router.replace('/');
-setTimeout(() => signOut(auth), 500);;
+                await // Pehle navigate, phir signout
+router.replace('/');
+await new Promise(r => setTimeout(r, 300));
+await signOut(auth);;
                 router.replace('/');
               }}>
                 <Ionicons name="log-out-outline" size={18} color="#DC2626" />

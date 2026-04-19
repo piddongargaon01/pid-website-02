@@ -1744,6 +1744,37 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
   // ═══════════════════════════════════════════
   // SCHEDULED NOTIFICATIONS CRUD
   // ═══════════════════════════════════════════
+  // ═══ PUSH NOTIFICATION HELPER ═══
+  async function sendPushToParents(message, title, target, notifType) {
+    try {
+      // Students filter karo target ke hisaab se
+      let targetStudents = students.filter(x => x.status === "active");
+      if (target && target !== "all" && target !== "parents" && target !== "students") {
+        targetStudents = filterByBatch(targetStudents, target);
+      }
+      // Parent push tokens collect karo
+      const tokens = targetStudents
+        .map(st => st.parentPushToken)
+        .filter(Boolean);
+      if (tokens.length === 0) return;
+
+      const typeEmoji = { test: "📝", holiday: "🏖", fee: "💰", event: "🎉", general: "📢" }[notifType] || "📢";
+      await fetch("/api/send-push-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tokens,
+          title: `${typeEmoji} Patel Institute Dongargaon`,
+          body: message,
+          data: { type: notifType || "general", screen: "notifications" },
+        }),
+      });
+      console.log(`Push sent to ${tokens.length} parents`);
+    } catch (e) {
+      console.error("Push error:", e);
+    }
+  }
+
   async function saveNotification() {
     if (!notifForm.date) { showMsg("Date is required!"); return; }
     if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
@@ -1792,7 +1823,9 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             });
             await updateDoc(doc(db, "scheduled_notifications", newDoc.id), { teacherNotifDocId: teacherNotifDoc.id });
           }
-          showMsg("Notification scheduled!" + (data.sendToTeachers ? " Teachers ko bhi bheja gaya." : ""));
+          // Push notification bhejo parents ko
+          await sendPushToParents(data.message, null, data.target, data.notifType);
+          showMsg("Notification scheduled! Parents ke phone pe push bhi gaya 🔔" + (data.sendToTeachers ? " Teachers ko bhi bheja gaya." : ""));
         }
       }
       setShowNotifForm(false); setNotifForm({});
@@ -2196,6 +2229,59 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           <div style={{ ...s.card, marginTop: 16, cursor: "pointer" }} onClick={() => switchTab("ai_doubts")}>
             <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 8 }}><i className="fas fa-brain" style={{ marginRight: 8, color: "#7C3AED" }} />AI Doubt Insights — Common Questions</h3>
             <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Click to see what students are commonly asking AI → Subject-wise analysis</p>
+          </div>
+
+          {/* ═══ QUICK NOTIFICATION BUTTON ═══ */}
+          <div style={{ ...s.card, marginTop: 16, border: "1px solid #FDE68A" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showNotifForm ? 16 : 0 }}>
+              <div>
+                <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 4 }}><i className="fas fa-bell" style={{ marginRight: 8, color: "#D98D04" }} />Quick Notification Send Karo</h3>
+                <p style={{ fontSize: ".78rem", color: "#6B7F99" }}>Students, Parents ya Teachers ko turant message bhejo</p>
+              </div>
+              <button onClick={() => { setShowNotifForm(!showNotifForm); setNotifForm({ date: new Date().toISOString().split("T")[0], target: "all", notifType: "general" }); }} style={{ ...s.btnO, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                <i className={`fas ${showNotifForm ? "fa-times" : "fa-paper-plane"}`} />{showNotifForm ? "Close" : "Send Notification"}
+              </button>
+            </div>
+            {showNotifForm && (
+              <div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <div>
+                    <label style={s.label}>Send To</label>
+                    <select style={s.input} value={notifForm.target || "all"} onChange={e => setNotifForm({ ...notifForm, target: e.target.value })}>
+                      <option value="all">All Students & Parents</option>
+                      <option value="parents">All Parents Only</option>
+                      <option value="students">All Students Only</option>
+                      <option value="teachers_all">🏫 All Teachers Only</option>
+                      <optgroup label="Class 12th">{BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
+                      <optgroup label="Class 11th">{BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
+                      <optgroup label="Class 10th">{BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
+                      <optgroup label="Class 9th">{BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
+                      <optgroup label="Junior Classes">{BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={s.label}>Type</label>
+                    <select style={s.input} value={notifForm.notifType || "general"} onChange={e => setNotifForm({ ...notifForm, notifType: e.target.value })}>
+                      <option value="general">General</option>
+                      <option value="test">Test / Exam</option>
+                      <option value="holiday">Holiday</option>
+                      <option value="fee">Fee Reminder</option>
+                      <option value="event">Event</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <label style={s.label}>Message *</label>
+                  <textarea style={{ ...s.input, height: 70, resize: "none" }} placeholder="e.g. Kal 10th class ka Science test hai 10:00 AM se..." value={notifForm.message || ""} onChange={e => setNotifForm({ ...notifForm, message: e.target.value })} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={saveNotification} disabled={saving} style={{ ...s.btnP, display: "flex", alignItems: "center", gap: 6 }}>
+                    <i className="fas fa-paper-plane" />{saving ? "Sending..." : "Send Now"}
+                  </button>
+                  <button onClick={() => { setShowNotifForm(false); setNotifForm({}); }} style={s.btnGray}>Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         </>}
 
