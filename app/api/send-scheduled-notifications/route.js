@@ -49,8 +49,9 @@ export async function GET(req) {
 
       let tokenData = { expo: [], native: [] };
       try {
-        tokenData = await getTargetTokens(db, n);
-      } catch (e) {
+        try {
+          tokenData = await getTargetTokens(db, n);
+        } catch (e) {
         results.errors.push({ id: n.id, error: "Token fetch failed: " + e.message });
         continue;
       }
@@ -210,9 +211,6 @@ export async function POST(req) {
     const totalSent = tokenData.native.length + tokenData.expo.length;
     await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount: totalSent });
     return NextResponse.json({ success: true, sentCount: totalSent });
-
-    await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount: tokens.length });
-    return NextResponse.json({ success: true, sentCount: tokens.length });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
