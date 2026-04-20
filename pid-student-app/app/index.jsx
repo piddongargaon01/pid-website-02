@@ -101,6 +101,9 @@ export default function Login() {
       if (user) {
         try {
           const role = await AsyncStorage.getItem('pid_user_role');
+          if (user.uid && role) {
+            registerForPushNotifications(user.uid, role); // Attempt registration
+          }
           if (role === 'teacher') {
             router.replace('/teacher-dashboard');
           } else if (role === 'student') {

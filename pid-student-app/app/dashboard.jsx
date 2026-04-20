@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import { auth, db } from '../firebase';
 import { useUnreadCount } from '../hooks/useUnreadCount';
+import { checkAndRequestAdvancedPermissions } from '../utils/notifications';
 
 // ─── SVG Ring Chart ───
 function RingChart({ value = 0, size = 100, stroke = 9 }) {
@@ -141,6 +142,7 @@ export default function Dashboard() {
             useNativeDriver: true
           }),
         ]).start();
+        checkAndRequestAdvancedPermissions();
       });
     });
     return unsub;

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { adminDb } from "../../../lib/firebase-admin";
+import { admin, adminDb } from "../../../lib/firebase-admin";
 
 function getAdminDb() {
   return adminDb;
@@ -47,60 +47,86 @@ export async function GET(req) {
       const scheduledAt = new Date(`${dateStr}T${timeStr}:00`);
       if (now < scheduledAt) { results.skipped.push(n.id); continue; }
 
-      let tokens = [];
+      let tokenData = { expo: [], native: [] };
       try {
-        tokens = await getTargetTokens(db, n);
+        tokenData = await getTargetTokens(db, n);
       } catch (e) {
         results.errors.push({ id: n.id, error: "Token fetch failed: " + e.message });
         continue;
       }
 
-      if (tokens.length === 0) {
+      if (tokenData.expo.length === 0 && tokenData.native.length === 0) {
         await docSnap.ref.update({ sent: true, sentAt: new Date().toISOString(), sentCount: 0 });
         results.skipped.push(n.id + " (no tokens)");
         continue;
       }
 
-      try {
-        const expoPushUrl = "https://exp.host/--/api/v2/push/send";
-        const messages = tokens.map(token => ({
-          to: token,
-          title: n.title || getTitleByType(n.notifType || n.type),
-          body: n.message,
-          sound: "default",
-          priority: "high",
-          channelId: "pid_alerts",
-          vibrate: true,
-          _displayInForeground: true, // For foreground popups
-          _contentAvailable: true,
-          ttl: 2419200, // 4 weeks
-          data: { 
-            type: n.notifType || n.type || "general", 
-            notifId: n.id,
-            displayInForeground: true,
-            channelId: "pid_alerts"
-          },
-        }));
+      const title = n.title || getTitleByType(n.notifType || n.type);
+      const body = n.message || "";
 
-        for (let i = 0; i < messages.length; i += 100) {
-          await fetch(expoPushUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(messages.slice(i, i + 100)),
-          });
+      // ─── Path 1: Native FCM (Direct) ───
+      if (tokenData.native.length > 0) {
+        try {
+          const fcmMessages = tokenData.native.map(token => ({
+            token: token,
+            notification: { title, body },
+            android: {
+              priority: "high",
+              notification: { channelId: "pid_alerts", sound: "default" }
+            },
+            data: { 
+              type: n.notifType || n.type || "general", 
+              notifId: n.id,
+              click_action: "FLUTTER_NOTIFICATION_CLICK" // for some legacy android handlers
+            }
+          }));
+
+          // Send in batches of 500 (Firebase limit)
+          for (let i = 0; i < fcmMessages.length; i += 500) {
+            await admin.messaging().sendEach(fcmMessages.slice(i, i + 500));
+          }
+        } catch (fcmErr) {
+          console.error("FCM Direct failed:", fcmErr.message);
         }
-
-        await docSnap.ref.update({
-          sent: true,
-          sentAt: new Date().toISOString(),
-          sentCount: tokens.length,
-        });
-
-        results.sent.push({ id: n.id, tokens: tokens.length, source: item.type });
-      } catch (e) {
-        results.errors.push({ id: n.id, error: "Push failed: " + e.message });
       }
+
+      // ─── Path 2: Expo Push (Fallback) ───
+      if (tokenData.expo.length > 0) {
+        try {
+          const expoPushUrl = "https://exp.host/--/api/v2/push/send";
+          const expoMessages = tokenData.expo.map(token => ({
+            to: token,
+            title, body,
+            sound: "default",
+            priority: "high",
+            channelId: "pid_alerts",
+            _contentAvailable: true,
+            data: { type: n.notifType || n.type || "general", notifId: n.id },
+          }));
+
+          for (let i = 0; i < expoMessages.length; i += 100) {
+            await fetch(expoPushUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(expoMessages.slice(i, i + 100)),
+            });
+          }
+        } catch (expoErr) {
+          console.error("Expo Fallback failed:", expoErr.message);
+        }
+      }
+
+      await docSnap.ref.update({
+        sent: true,
+        sentAt: new Date().toISOString(),
+        sentCount: tokenData.native.length + tokenData.expo.length,
+      });
+
+      results.sent.push({ id: n.id, tokens: tokenData.native.length + tokenData.expo.length, source: item.type });
+    } catch (e) {
+      results.errors.push({ id: n.id, error: "Processing failed: " + e.message });
     }
+  }
 
     return NextResponse.json({ success: true, results, checkedAt: now.toISOString() });
   } catch (e) {
@@ -128,36 +154,62 @@ export async function POST(req) {
     if (!docSnap.exists) return NextResponse.json({ error: "Notification not found" }, { status: 404 });
 
     const n = { id: docSnap.id, ...docSnap.data() };
-    const tokens = await getTargetTokens(db, n);
+    const tokenData = await getTargetTokens(db, n);
 
-    if (tokens.length === 0) return NextResponse.json({ error: "No target tokens found" });
-
-    const expoPushUrl = "https://exp.host/--/api/v2/push/send";
-    const messages = tokens.map(token => ({
-      to: token,
-      title: n.title || getTitleByType(n.notifType || n.type),
-      body: n.message,
-      sound: "default",
-      priority: "high",
-      channelId: "pid_alerts",
-      vibrate: true,
-      _displayInForeground: true,
-      _contentAvailable: true,
-      data: { 
-        type: n.notifType || n.type || "general", 
-        notifId: n.id, 
-        displayInForeground: true,
-        channelId: "pid_alerts"
-      },
-    }));
-
-    for (let i = 0; i < messages.length; i += 100) {
-      await fetch(expoPushUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(messages.slice(i, i + 100)),
-      });
+    if (tokenData.expo.length === 0 && tokenData.native.length === 0) {
+      return NextResponse.json({ error: "No target tokens found" });
     }
+
+    const title = n.title || getTitleByType(n.notifType || n.type);
+    const body = n.message || "";
+
+    // ─── Path 1: Native FCM (Direct) ───
+    if (tokenData.native.length > 0) {
+      try {
+        const fcmMessages = tokenData.native.map(token => ({
+          token: token,
+          notification: { title, body },
+          android: {
+            priority: "high",
+            notification: { channelId: "pid_alerts", sound: "default" }
+          },
+          data: { 
+            type: n.notifType || n.type || "general", 
+            notifId: n.id 
+          }
+        }));
+        for (let i = 0; i < fcmMessages.length; i += 500) {
+          await admin.messaging().sendEach(fcmMessages.slice(i, i + 500));
+        }
+      } catch (e) { console.error("FCM Direct Error:", e); }
+    }
+
+    // ─── Path 2: Expo Push (Fallback) ───
+    if (tokenData.expo.length > 0) {
+      try {
+        const expoPushUrl = "https://exp.host/--/api/v2/push/send";
+        const expoMessages = tokenData.expo.map(token => ({
+          to: token,
+          title, body,
+          sound: "default",
+          priority: "high",
+          channelId: "pid_alerts",
+          _contentAvailable: true,
+          data: { type: n.notifType || n.type || "general", notifId: n.id },
+        }));
+        for (let i = 0; i < expoMessages.length; i += 100) {
+          await fetch(expoPushUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(expoMessages.slice(i, i + 100)),
+          });
+        }
+      } catch (e) { console.error("Expo Fallback Error:", e); }
+    }
+
+    const totalSent = tokenData.native.length + tokenData.expo.length;
+    await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount: totalSent });
+    return NextResponse.json({ success: true, sentCount: totalSent });
 
     await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount: tokens.length });
     return NextResponse.json({ success: true, sentCount: tokens.length });
@@ -168,36 +220,48 @@ export async function POST(req) {
 
 async function getTargetTokens(db, n) {
   const target = n.forClass || n.target || "all";
-  let tokens = [];
+  let expo = [];
+  let native = [];
+
+  const add = (data) => {
+    // Parent tokens
+    if (data.parentNativeFcmToken) native.push(data.parentNativeFcmToken);
+    if (data.parentNativeToken) native.push(data.parentNativeToken); // check variations
+    if (data.parentPushToken) expo.push(data.parentPushToken);
+
+    // Student/Admin/Teacher tokens
+    if (data.nativeFcmToken) native.push(data.nativeFcmToken);
+    if (data.expoPushToken) expo.push(data.expoPushToken);
+  };
 
   if (target === "teachers_all") {
-    const snap = await db.collection("teachers").where("expoPushToken", "!=", null).get();
-    snap.docs.forEach(d => { if (d.data().expoPushToken) tokens.push(d.data().expoPushToken); });
-    return tokens;
+    const snap = await db.collection("teachers").get();
+    snap.docs.forEach(d => add(d.data()));
+  } else {
+    const studentsSnap = await db.collection("students").where("status", "==", "active").get();
+    studentsSnap.docs.forEach(d => {
+      const st = d.data();
+      if (target !== "all" && target !== "students" && target !== "parents") {
+        if (!matchesBatch(st, target)) return;
+      }
+
+      if (target === "students") {
+        if (st.nativeFcmToken) native.push(st.nativeFcmToken);
+        if (st.expoPushToken) expo.push(st.expoPushToken);
+      } else if (target === "parents") {
+        if (st.parentNativeFcmToken) native.push(st.parentNativeFcmToken);
+        if (st.parentNativeToken) native.push(st.parentNativeToken);
+        if (st.parentPushToken) expo.push(st.parentPushToken);
+      } else {
+        add(st);
+      }
+    });
   }
 
-  const studentsSnap = await db.collection("students").where("status", "==", "active").get();
-  studentsSnap.docs.forEach(d => {
-    const st = d.data();
-    // Batch filtering
-    if (target !== "all" && target !== "students" && target !== "parents") {
-      if (!matchesBatch(st, target)) return;
-    }
-
-    // Add tokens based on target
-    if (target === "students") {
-      if (st.expoPushToken) tokens.push(st.expoPushToken);
-    } else if (target === "parents") {
-      if (st.parentPushToken) tokens.push(st.parentPushToken);
-    } else {
-      // For "all" or specific batches, send to both student and parent
-      if (st.expoPushToken) tokens.push(st.expoPushToken);
-      if (st.parentPushToken) tokens.push(st.parentPushToken);
-    }
-  });
-
-  // Remove duplicates
-  return [...new Set(tokens)];
+  return {
+    expo: [...new Set(expo)],
+    native: [...new Set(native)]
+  };
 }
 
 function matchesBatch(student, batchValue) {
