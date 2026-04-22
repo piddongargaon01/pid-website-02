@@ -66,6 +66,53 @@ export async function POST(request) {
 
     await db.collection("attendance").add(record);
 
+    // ─── Automated Push Notification for Parents ───
+    if (studentData && !isTeacher) {
+      const parentTokens = [];
+      if (studentData.parentNativeFcmToken) parentTokens.push(studentData.parentNativeFcmToken);
+      if (studentData.parentNativeToken) parentTokens.push(studentData.parentNativeToken);
+      if (studentData.parentPushToken) parentTokens.push(studentData.parentPushToken); // expo token fallback
+
+      if (parentTokens.length > 0) {
+        try {
+          const time = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+          const studentName = record.studentName || "Bachcha";
+          const title = type === "in" ? "🎒 School/Library Pahuncha" : "🏠 Ghar Ke Liye Nikala";
+          const body = type === "in" 
+            ? `${studentName} aaj ${time} ko coaching pahuncha/aya.` 
+            : `${studentName} aaj ${time} ko coaching se nikala.`;
+
+          const uniqueTokens = [...new Set(parentTokens)];
+          const fcmMessages = uniqueTokens.filter(t => !t.startsWith("ExponentPushToken")).map(token => ({
+            token,
+            notification: { title, body },
+            android: { priority: "high", notification: { channelId: "pid_alerts", sound: "default" } },
+            data: { type: "attendance", studentId: studentId || "unknown" }
+          }));
+
+          // Send Native FCM
+          if (fcmMessages.length > 0) {
+            await admin.messaging().sendEach(fcmMessages);
+          }
+
+          // Fallback for Expo tokens
+          const expoTokens = uniqueTokens.filter(t => t.startsWith("ExponentPushToken"));
+          if (expoTokens.length > 0) {
+            await fetch("https://exp.host/--/api/v2/push/send", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(expoTokens.map(to => ({
+                to, title, body, sound: "default", priority: "high", channelId: "pid_alerts",
+                data: { type: "attendance", studentId: studentId || "unknown" }
+              })))
+            });
+          }
+        } catch (pushErr) {
+          console.error("Attendance Push Error:", pushErr.message);
+        }
+      }
+    }
+
     return NextResponse.json({ success: true, name: record.studentName, type: type, matched: !!studentData, isTeacher: isTeacher }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: "Server error: " + error.message }, { status: 500 });

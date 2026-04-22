@@ -224,6 +224,15 @@ function formatDate(ts) {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function parseDMY(dStr) {
+  if (!dStr) return "";
+  if (dStr.includes("-")) return dStr;
+  const parts = dStr.split("/");
+  if (parts.length !== 3) return dStr;
+  const [d, m, y] = parts;
+  return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
 // ═══════════════════════════════════════════
 // DEFAULT COURSE DATA (for seeding Firebase)
 // ═══════════════════════════════════════════
@@ -374,30 +383,11 @@ const DEFAULT_COURSES = {
 };
 
 export default function AdminPanel() {
-  // ═══ BATCH OPTIONS (Class + Medium + Board) — As per PID Course Structure ═══
-  const BATCH_OPTIONS = [
-    // Class 12th
-    { value: "12th-Eng-CBSE-ICSE", label: "12th English (CBSE+ICSE)", class: "12th", medium: "English", boards: ["CBSE", "ICSE"] },
-    { value: "12th-Hindi-CG-CBSE", label: "12th Hindi (CG+CBSE)", class: "12th", medium: "Hindi", boards: ["CG", "CBSE"] },
-    { value: "12th-Eng-CG", label: "12th English (CG Board)", class: "12th", medium: "English", boards: ["CG"] },
-    // Class 11th
-    { value: "11th-Eng-CBSE-ICSE", label: "11th English (CBSE+ICSE)", class: "11th", medium: "English", boards: ["CBSE", "ICSE"] },
-    { value: "11th-Hindi-CG-CBSE", label: "11th Hindi (CG+CBSE)", class: "11th", medium: "Hindi", boards: ["CG", "CBSE"] },
-    { value: "11th-Eng-CG", label: "11th English (CG Board)", class: "11th", medium: "English", boards: ["CG"] },
-    // Class 10th
-    { value: "10th-Eng-All", label: "10th English (CG+CBSE+ICSE)", class: "10th", medium: "English", boards: ["CG", "CBSE", "ICSE"] },
-    { value: "10th-Hindi-CG-CBSE", label: "10th Hindi (CG+CBSE)", class: "10th", medium: "Hindi", boards: ["CG", "CBSE"] },
-    // Class 9th
-    { value: "9th-Eng-All", label: "9th English (CG+CBSE+ICSE)", class: "9th", medium: "English", boards: ["CG", "CBSE", "ICSE"] },
-    { value: "9th-Hindi-CG-CBSE", label: "9th Hindi (CG+CBSE)", class: "9th", medium: "Hindi", boards: ["CG", "CBSE"] },
-    // Junior Classes
-    { value: "2nd-8th-All", label: "2nd-8th All Medium (CG+CBSE+ICSE)", class: "2nd-8th", medium: "All", boards: ["CG", "CBSE", "ICSE"] },
-    // Entrance Coaching
-    { value: "Navodaya", label: "Navodaya Entrance", class: "Navodaya", medium: "All", boards: [] },
-    { value: "Prayas", label: "Prayas Awasiya Vidyalaya", class: "Prayas", medium: "All", boards: [] },
-    // Competition Exam
-    { value: "JEE-NEET", label: "IIT-JEE & NEET (9th-12th)", class: "JEE-NEET", medium: "All", boards: [] },
-  ];
+  // ═══ BATCH OPTIONS — Now dynamic from Firestore class_batches collection ═══
+  const [classBatches, setClassBatches] = useState([]);
+  // BATCH_OPTIONS and CLASS_CATEGORIES both point to the same dynamic classBatches
+  const BATCH_OPTIONS = classBatches;
+  const CLASS_CATEGORIES = classBatches;
 
   // Helper: filter students by batch value
   function filterByBatch(list, batchValue) {
@@ -507,26 +497,7 @@ export default function AdminPanel() {
   };
   const [recBatchYear, setRecBatchYear] = useState(getCurrentBatchYear());
 
-  // ═══ CLASS CATEGORIES (Image ke according) ═══
-  const CLASS_CATEGORIES = [
-    // Foundation Courses
-    { id: "12th-Eng-CBSE-ICSE", label: "12th English (CBSE+ICSE)", shortLabel: "12 Eng CB+IC", icon: "fa-user-graduate", color: "#1349A8" },
-    { id: "12th-Hindi-CG-CBSE", label: "12th Hindi (CG+CBSE)", shortLabel: "12 Hin CG+CB", icon: "fa-user-graduate", color: "#2A6FE0" },
-    { id: "12th-Eng-CG", label: "12th English (CG Board)", shortLabel: "12 Eng CG", icon: "fa-user-graduate", color: "#3B82F6" },
-    { id: "11th-Eng-CBSE-ICSE", label: "11th English (CBSE+ICSE)", shortLabel: "11 Eng CB+IC", icon: "fa-user-graduate", color: "#059669" },
-    { id: "11th-Hindi-CG-CBSE", label: "11th Hindi (CG+CBSE)", shortLabel: "11 Hin CG+CB", icon: "fa-user-graduate", color: "#16A34A" },
-    { id: "11th-Eng-CG", label: "11th English (CG Board)", shortLabel: "11 Eng CG", icon: "fa-user-graduate", color: "#4ADE80" },
-    { id: "10th-Eng-All", label: "10th English (CG+CBSE+ICSE)", shortLabel: "10 Eng All", icon: "fa-user-graduate", color: "#7C3AED" },
-    { id: "10th-Hindi-CG-CBSE", label: "10th Hindi (CG+CBSE)", shortLabel: "10 Hin CG+CB", icon: "fa-user-graduate", color: "#A78BFA" },
-    { id: "9th-Eng-All", label: "9th English (CG+CBSE+ICSE)", shortLabel: "9 Eng All", icon: "fa-user-graduate", color: "#D98D04" },
-    { id: "9th-Hindi-CG-CBSE", label: "9th Hindi (CG+CBSE)", shortLabel: "9 Hin CG+CB", icon: "fa-user-graduate", color: "#F5AC10" },
-    { id: "2nd-8th-All", label: "2nd-8th All Medium (CG+CBSE+ICSE)", shortLabel: "2-8 All", icon: "fa-child", color: "#DC2626" },
-    // Entrance
-    { id: "Navodaya", label: "Navodaya Entrance", shortLabel: "Navodaya", icon: "fa-award", color: "#0891B2" },
-    { id: "Prayas", label: "Prayas Awasiya Vidyalaya", shortLabel: "Prayas", icon: "fa-award", color: "#0E7490" },
-    // Competition
-    { id: "JEE-NEET", label: "IIT-JEE & NEET (9th-12th)", shortLabel: "JEE+NEET", icon: "fa-flask", color: "#BE185D" },
-  ];
+  // CLASS_CATEGORIES is now the same as classBatches (set above with BATCH_OPTIONS)
 
   // ═══ EXAM & TEST MANAGEMENT STATES ═══
   const [examList, setExamList] = useState([]); // Firebase se exams
@@ -642,6 +613,27 @@ export default function AdminPanel() {
       const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
       arr.sort((a, b) => (a.order || 99) - (b.order || 99));
       setCourses(arr);
+    }));
+    // ═══ CLASS BATCHES — Dynamic class list ═══
+    unsubs.push(onSnapshot(collection(db, "class_batches"), s => {
+      const arr = s.docs.map(d => {
+        const data = d.data();
+        return {
+          id: data.value || d.id,
+          value: data.value || d.id,
+          label: data.label || "",
+          shortLabel: data.shortLabel || data.label || "",
+          class: data.class || "",
+          medium: data.medium || "All",
+          board: data.board || "",
+          boards: data.board ? [data.board] : [],
+          icon: data.icon || "fa-user-graduate",
+          color: data.color || "#1349A8",
+          order: data.order || 99,
+        };
+      });
+      arr.sort((a, b) => (a.order || 99) - (b.order || 99));
+      setClassBatches(arr);
     }));
     unsubs.push(onSnapshot(collection(db, "featured_toppers"), s => {
       const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1056,8 +1048,45 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
         setMarksData(prev => ({ ...prev, [studentId]: { ...marksCopy, _docId: newDoc.id } }));
       }
       showMsg(`${st?.studentName} marks saved!`);
+      
+      // NEW: Trigger Notification to Student/Parent
+      sendResultNotification(st, examTitle, marksCopy);
+      
     } catch (e) { showMsg("Error: " + e.message); }
     setMarksSaving(false);
+  }
+
+  // ─── NEW: Send Result Notification Function ───
+  async function sendResultNotification(student, examTitle, marks) {
+    if (!student) return;
+    try {
+      const totalObtained = Object.values(marks).reduce((s, v) => s + (Number(v) || 0), 0);
+      const data = {
+        title: "📊 Test Result Out!",
+        message: `${student.studentName} ka ${examTitle} result upload ho gaya hai. Total Marks: ${totalObtained}. View on App.`,
+        notifType: "result",
+        target: "specific",
+        specificStudentId: student.id,
+        date: new Date().toISOString().split("T")[0],
+        time: new Date().toLocaleTimeString("en-IN", { hour12: false, hour: "2-digit", minute: "2-digit" })
+      };
+
+      // Save to Firebase (so it shows in app history)
+      const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
+
+      // Trigger API for immediate send
+      await fetch("/api/send-scheduled-notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          notifId: newDoc.id,
+          secret: "pid_cron_2026"
+        }),
+      });
+      console.log("Result notification triggered for:", student.studentName);
+    } catch (err) {
+      console.error("Failed to send result notification:", err);
+    }
   }
 
   // ═══ PERFORMANCE — Load student ke saare exam results + AI data ═══
@@ -1352,14 +1381,34 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
       delete data.featuresText;
       // Remove any undefined values — Firestore rejects them
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
+      
+      let savedCourseId = editId;
       if (editId) {
         const { id, ...rest } = data;
         await updateDoc(doc(db, "courses", editId), { ...rest, updatedAt: serverTimestamp() });
         showMsg("Course updated!");
       } else {
-        await addDoc(collection(db, "courses"), { ...data, createdAt: serverTimestamp() });
+        const docRef = await addDoc(collection(db, "courses"), { ...data, createdAt: serverTimestamp() });
+        savedCourseId = docRef.id;
         showMsg("Course added!");
       }
+
+      // SYNC: Auto-update Teachers
+      const courseClassId = data.classId || savedCourseId;
+      const courseTeachers = data.teachers || [];
+      for (const t of courseTeachers) {
+        if (t.teacherId || t.name) {
+          const teacherDoc = teachers.find(x => x.id === t.teacherId || x.name === t.name);
+          if (teacherDoc) {
+             const tClasses = Array.isArray(teacherDoc.classes) ? [...teacherDoc.classes] : (typeof teacherDoc.classes === "string" && teacherDoc.classes.trim() ? [teacherDoc.classes] : []);
+             if (!tClasses.includes(courseClassId)) {
+               tClasses.push(courseClassId);
+               await updateDoc(doc(db, "teachers", teacherDoc.id), { classes: tClasses, updatedAt: serverTimestamp() });
+             }
+          }
+        }
+      }
+
       resetForm();
     } catch (e) { showMsg("Error: " + e.message); }
     setSaving(false);
@@ -1369,6 +1418,112 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     if (!confirm("Delete this course? This action cannot be undone.")) return;
     try { await deleteDoc(doc(db, "courses", id)); showMsg("Course deleted!"); } catch (e) { showMsg("Error!"); }
   }
+
+  // ═══════════════════════════════════════════
+  // CLASS BATCHES CRUD (Dynamic Class Management)
+  // ═══════════════════════════════════════════
+  const [classForm, setClassForm] = useState({});
+  const [showClassForm, setShowClassForm] = useState(false);
+
+  const DEFAULT_CLASS_BATCHES = [
+    { value: "12th-Eng-CBSE", label: "12th English (CBSE)", shortLabel: "12 Eng CBSE", class: "12th", medium: "English", board: "CBSE", icon: "fa-user-graduate", color: "#1349A8", order: 1 },
+    { value: "12th-Eng-ICSE", label: "12th English (ICSE)", shortLabel: "12 Eng ICSE", class: "12th", medium: "English", board: "ICSE", icon: "fa-user-graduate", color: "#2563EB", order: 2 },
+    { value: "12th-Eng-CG", label: "12th English (CG Board)", shortLabel: "12 Eng CG", class: "12th", medium: "English", board: "CG", icon: "fa-user-graduate", color: "#3B82F6", order: 3 },
+    { value: "12th-Hindi-CG", label: "12th Hindi (CG Board)", shortLabel: "12 Hin CG", class: "12th", medium: "Hindi", board: "CG", icon: "fa-user-graduate", color: "#2A6FE0", order: 4 },
+    { value: "12th-Hindi-CBSE", label: "12th Hindi (CBSE)", shortLabel: "12 Hin CBSE", class: "12th", medium: "Hindi", board: "CBSE", icon: "fa-user-graduate", color: "#1D4ED8", order: 5 },
+    { value: "11th-Eng-CBSE", label: "11th English (CBSE)", shortLabel: "11 Eng CBSE", class: "11th", medium: "English", board: "CBSE", icon: "fa-user-graduate", color: "#059669", order: 6 },
+    { value: "11th-Eng-ICSE", label: "11th English (ICSE)", shortLabel: "11 Eng ICSE", class: "11th", medium: "English", board: "ICSE", icon: "fa-user-graduate", color: "#047857", order: 7 },
+    { value: "11th-Eng-CG", label: "11th English (CG Board)", shortLabel: "11 Eng CG", class: "11th", medium: "English", board: "CG", icon: "fa-user-graduate", color: "#4ADE80", order: 8 },
+    { value: "11th-Hindi-CG", label: "11th Hindi (CG Board)", shortLabel: "11 Hin CG", class: "11th", medium: "Hindi", board: "CG", icon: "fa-user-graduate", color: "#16A34A", order: 9 },
+    { value: "11th-Hindi-CBSE", label: "11th Hindi (CBSE)", shortLabel: "11 Hin CBSE", class: "11th", medium: "Hindi", board: "CBSE", icon: "fa-user-graduate", color: "#15803D", order: 10 },
+    { value: "10th-Eng-CG", label: "10th English (CG Board)", shortLabel: "10 Eng CG", class: "10th", medium: "English", board: "CG", icon: "fa-user-graduate", color: "#7C3AED", order: 11 },
+    { value: "10th-Eng-CBSE", label: "10th English (CBSE)", shortLabel: "10 Eng CBSE", class: "10th", medium: "English", board: "CBSE", icon: "fa-user-graduate", color: "#6D28D9", order: 12 },
+    { value: "10th-Eng-ICSE", label: "10th English (ICSE)", shortLabel: "10 Eng ICSE", class: "10th", medium: "English", board: "ICSE", icon: "fa-user-graduate", color: "#A78BFA", order: 13 },
+    { value: "10th-Hindi-CG", label: "10th Hindi (CG Board)", shortLabel: "10 Hin CG", class: "10th", medium: "Hindi", board: "CG", icon: "fa-user-graduate", color: "#8B5CF6", order: 14 },
+    { value: "10th-Hindi-CBSE", label: "10th Hindi (CBSE)", shortLabel: "10 Hin CBSE", class: "10th", medium: "Hindi", board: "CBSE", icon: "fa-user-graduate", color: "#7C3AED", order: 15 },
+    { value: "9th-Eng-CG", label: "9th English (CG Board)", shortLabel: "9 Eng CG", class: "9th", medium: "English", board: "CG", icon: "fa-user-graduate", color: "#D98D04", order: 16 },
+    { value: "9th-Eng-CBSE", label: "9th English (CBSE)", shortLabel: "9 Eng CBSE", class: "9th", medium: "English", board: "CBSE", icon: "fa-user-graduate", color: "#B45309", order: 17 },
+    { value: "9th-Eng-ICSE", label: "9th English (ICSE)", shortLabel: "9 Eng ICSE", class: "9th", medium: "English", board: "ICSE", icon: "fa-user-graduate", color: "#F5AC10", order: 18 },
+    { value: "9th-Hindi-CG", label: "9th Hindi (CG Board)", shortLabel: "9 Hin CG", class: "9th", medium: "Hindi", board: "CG", icon: "fa-user-graduate", color: "#D97706", order: 19 },
+    { value: "9th-Hindi-CBSE", label: "9th Hindi (CBSE)", shortLabel: "9 Hin CBSE", class: "9th", medium: "Hindi", board: "CBSE", icon: "fa-user-graduate", color: "#CA8A04", order: 20 },
+    { value: "2nd-8th-All", label: "2nd-8th All Medium", shortLabel: "2-8 All", class: "2nd-8th", medium: "All", board: "All", icon: "fa-child", color: "#DC2626", order: 21 },
+    { value: "Navodaya", label: "Navodaya Entrance", shortLabel: "Navodaya", class: "Navodaya", medium: "All", board: "All", icon: "fa-award", color: "#0891B2", order: 22 },
+    { value: "Prayas", label: "Prayas Awasiya Vidyalaya", shortLabel: "Prayas", class: "Prayas", medium: "All", board: "All", icon: "fa-award", color: "#0E7490", order: 23 },
+    { value: "JEE-NEET", label: "IIT-JEE & NEET (9th-12th)", shortLabel: "JEE+NEET", class: "JEE-NEET", medium: "All", board: "All", icon: "fa-flask", color: "#BE185D", order: 24 },
+  ];
+
+  async function seedDefaultClasses() {
+    if (!confirm("This will add 24 separated class entries to Firebase. Continue?")) return;
+    setSaving(true);
+    try {
+      for (const cls of DEFAULT_CLASS_BATCHES) {
+        // Check if already exists
+        const existing = classBatches.find(b => b.value === cls.value);
+        if (!existing) {
+          await addDoc(collection(db, "class_batches"), { ...cls, createdAt: serverTimestamp() });
+        }
+      }
+      showMsg(`Default classes added! ${DEFAULT_CLASS_BATCHES.length} entries.`);
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+
+  async function addClassBatch() {
+    if (!classForm.label?.trim()) { showMsg("Class label required!"); return; }
+    if (!classForm.class?.trim()) { showMsg("Class level required! (e.g. 12th, 11th)"); return; }
+    setSaving(true);
+    try {
+      const value = classForm.value || `${classForm.class}-${classForm.medium || "All"}-${classForm.board || "All"}`.replace(/\s+/g, "");
+      // Check duplicate
+      if (classBatches.find(b => b.value === value)) { showMsg("This class already exists!"); setSaving(false); return; }
+      await addDoc(collection(db, "class_batches"), {
+        value,
+        label: classForm.label,
+        shortLabel: classForm.shortLabel || classForm.label,
+        class: classForm.class,
+        medium: classForm.medium || "All",
+        board: classForm.board || "All",
+        icon: classForm.icon || "fa-user-graduate",
+        color: classForm.color || "#1349A8",
+        order: Number(classForm.order) || classBatches.length + 1,
+        createdAt: serverTimestamp(),
+      });
+      showMsg(`Class "${classForm.label}" added! Ab ye sabhi sections me dikhega.`);
+      setClassForm({});
+      setShowClassForm(false);
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+
+  async function deleteClassBatch(batchValue) {
+    const cls = classBatches.find(b => b.value === batchValue);
+    if (!cls) return;
+    // Check students
+    const studCount = students.filter(st => {
+      const stClass = st.class || st.presentClass || "";
+      const normalizeBoard = (b) => { if (!b) return ""; if (b === "CG Board") return "CG"; return b; };
+      if (cls.class === "JEE-NEET") return ["9th","10th","11th","12th"].includes(stClass);
+      if (cls.class === "2nd-8th") return ["2nd","3rd","4th","5th","6th","7th","8th"].includes(stClass);
+      const classMatch = stClass === cls.class;
+      const mediumMatch = cls.medium === "All" || !st.medium || st.medium === cls.medium;
+      const boardMatch = cls.board === "All" || !st.board || normalizeBoard(st.board) === cls.board;
+      return classMatch && mediumMatch && boardMatch;
+    }).length;
+    // Check materials
+    const matCount = materials.filter(m => m.courseId === batchValue || m.forClass === batchValue).length;
+    if (studCount > 0 || matCount > 0) {
+      alert(`Cannot delete "${cls.label}"!\n\n${studCount} student(s) and ${matCount} study material(s) exist for this class.\n\nPehle students hataao aur materials delete karo, phir class delete hogi.`);
+      return;
+    }
+    if (!confirm(`Delete class "${cls.label}"? It will be removed from ALL sections.`)) return;
+    try {
+      // Find and delete the Firestore doc
+      const snap = await getDocs(query(collection(db, "class_batches"), where("value", "==", batchValue)));
+      for (const d of snap.docs) { await deleteDoc(doc(db, "class_batches", d.id)); }
+      showMsg(`Class "${cls.label}" deleted!`);
+    } catch (e) { showMsg("Error: " + e.message); }
+  }
+
 
   // Batch helpers
   function addBatch() {
@@ -1387,7 +1542,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
 
   // Teacher helpers
   function addTeacher() {
-    const teachers = [...(form.teachers || []), { name: "", subject: "", qual: "", exp: "", photo: "" }];
+    const teachers = [...(form.teachers || []), { teacherId: "", name: "", subject: "", qual: "", exp: "", photo: "" }];
     setForm({ ...form, teachers });
   }
   function updateTeacher(idx, field, val) {
@@ -1530,6 +1685,11 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     setSaving(true);
     try {
       const data = { ...form };
+      if (typeof data.classes === "string" && data.classes.trim()) {
+        data.classes = [data.classes];
+      } else if (!data.classes) {
+        data.classes = [];
+      }
       // RFID Normalization
       if (data.rfidCode) {
         data.rfidCode = data.rfidCode.toString().toUpperCase().replace(/\s+/g, "").trim();
@@ -1541,14 +1701,53 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
         if (rfidDupStudent) { showMsg(`RFID "${data.rfidCode}" already assigned to student ${rfidDupStudent.studentName}! Teacher aur student ka RFID same nahi ho sakta.`); setSaving(false); return; }
       }
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
+      let savedTeacherId = editId;
       if (editId) {
         const { id, ...rest } = data;
         await updateDoc(doc(db, "teachers", editId), { ...rest, updatedAt: serverTimestamp() });
         showMsg("Teacher updated!");
       } else {
-        await addDoc(collection(db, "teachers"), { ...data, createdAt: serverTimestamp() });
+        const docRef = await addDoc(collection(db, "teachers"), { ...data, createdAt: serverTimestamp() });
+        savedTeacherId = docRef.id;
         showMsg("Teacher added!");
       }
+
+      // SYNC: Auto-update Courses based on selected classes
+      const selectedClassIds = data.classes || [];
+      const teacherObjForCourse = {
+        name: data.name || "",
+        subject: data.subject || "",
+        qual: data.qualification || "",
+        exp: data.experience || "",
+        photo: data.photo || "",
+        teacherId: savedTeacherId
+      };
+
+      for (const course of courses) {
+        const cId = course.classId || course.id;
+        const isSelected = selectedClassIds.includes(cId);
+        
+        let courseTeachers = course.teachers || [];
+        const existingIdx = courseTeachers.findIndex(t => t.teacherId === savedTeacherId || t.name === data.name);
+        
+        let needsUpdate = false;
+        
+        if (isSelected && existingIdx === -1) {
+          courseTeachers.push(teacherObjForCourse);
+          needsUpdate = true;
+        } else if (isSelected && existingIdx !== -1) {
+          courseTeachers[existingIdx] = teacherObjForCourse; 
+          needsUpdate = true;
+        } else if (!isSelected && existingIdx !== -1) {
+          courseTeachers = courseTeachers.filter((_, idx) => idx !== existingIdx);
+          needsUpdate = true;
+        }
+
+        if (needsUpdate) {
+          await updateDoc(doc(db, "courses", course.id), { teachers: courseTeachers, updatedAt: serverTimestamp() });
+        }
+      }
+
       resetForm();
     } catch (e) { showMsg("Error: " + e.message); }
     setSaving(false);
@@ -1701,9 +1900,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
       const data = { ...holidayForm };
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
 
-      // ═══ Multiple days support ═══
       if (holidayForm.dateFrom && holidayForm.dateTo && holidayForm.dateFrom !== holidayForm.dateTo) {
-        // Multiple days — har din ke liye alag holiday entry banao
         const start = new Date(holidayForm.dateFrom);
         const end = new Date(holidayForm.dateTo);
         if (end < start) { showMsg("End date start date se pehle nahi ho sakti!"); setSaving(false); return; }
@@ -1716,11 +1913,9 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           count++;
           current.setDate(current.getDate() + 1);
         }
-        showMsg(`${count} din ki chhuttiyan add ho gayin! (${holidayForm.dateFrom} → ${holidayForm.dateTo})`);
+        showMsg(`${count} din ki chhuttiyan add ho gayin!`);
       } else {
-        // Single day
         const singleDate = holidayForm.date || holidayForm.dateFrom || "";
-        if (!singleDate) { showMsg("Date is required!"); setSaving(false); return; }
         const { dateFrom, dateTo, ...cleanData } = data;
         cleanData.date = singleDate;
         if (holidayForm.editId) {
@@ -1736,6 +1931,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     } catch (e) { showMsg("Error: " + e.message); }
     setSaving(false);
   }
+
   async function deleteHoliday(id) {
     if (!confirm("Delete this holiday?")) return;
     try { await deleteDoc(doc(db, "holidays", id)); showMsg("Holiday deleted!"); } catch (e) { showMsg("Error!"); }
@@ -1744,48 +1940,22 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
   // ═══════════════════════════════════════════
   // SCHEDULED NOTIFICATIONS CRUD
   // ═══════════════════════════════════════════
-  // ═══ PUSH NOTIFICATION HELPER ═══
-  async function sendPushToParents(message, title, target, notifType) {
-    try {
-      // Students filter karo target ke hisaab se
-      let targetStudents = students.filter(x => x.status === "active");
-      if (target && target !== "all" && target !== "parents" && target !== "students") {
-        targetStudents = filterByBatch(targetStudents, target);
-      }
-      // Parent push tokens collect karo
-      const tokens = targetStudents
-        .map(st => st.parentPushToken)
-        .filter(Boolean);
-      if (tokens.length === 0) return;
-
-      const typeEmoji = { test: "📝", holiday: "🏖", fee: "💰", event: "🎉", general: "📢" }[notifType] || "📢";
-      await fetch("/api/send-push-notification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tokens,
-          title: `${typeEmoji} Patel Institute Dongargaon`,
-          body: message,
-          data: { type: notifType || "general", screen: "notifications" },
-        }),
-      });
-      console.log(`Push sent to ${tokens.length} parents`);
-    } catch (e) {
-      console.error("Push error:", e);
-    }
-  }
-
   async function saveNotification() {
     if (!notifForm.date) { showMsg("Date is required!"); return; }
     if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
+    if (!notifForm.targetBatches?.length && !notifForm.target) { showMsg("Please select at least one Target!"); return; }
+    
     setSaving(true);
     try {
       const data = { ...notifForm };
+      if (notifForm.targetBatches?.length > 0) {
+        data.target = notifForm.targetBatches.join(",");
+      }
+
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
       if (notifForm.editId) {
         const { editId: eid, ...rest } = data;
         await updateDoc(doc(db, "scheduled_notifications", eid), { ...rest, updatedAt: serverTimestamp() });
-        // Agar teacher target hai to notifications collection bhi update karo
         if (rest.sendToTeachers && rest.teacherNotifDocId) {
           await updateDoc(doc(db, "notifications", rest.teacherNotifDocId), {
             message: rest.message, type: rest.notifType || "general", scheduledDate: rest.date, scheduledTime: rest.time || "",
@@ -1795,39 +1965,15 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
         showMsg("Notification updated!");
       } else {
         if (data.target === "teachers_all") {
-          // Sirf teachers ko — notifications collection me save karo
-          await addDoc(collection(db, "notifications"), {
-            message: data.message,
-            type: data.notifType || "general",
-            scheduledDate: data.date,
-            scheduledTime: data.time || "",
-            forTeacher: "all",
-            targetType: "teacher",
-            sentBy: "Admin",
-            sent: false,
-            createdAt: serverTimestamp(),
-          });
+          await addDoc(collection(db, "notifications"), { message: data.message, type: data.notifType || "general", scheduledDate: data.date, scheduledTime: data.time || "", forTeacher: "all", targetType: "teacher", sentBy: "Admin", sent: false, createdAt: serverTimestamp() });
           showMsg("Notification sabhi Teachers ko bhej diya!");
         } else {
-          // Students/Parents ke liye — scheduled_notifications me save karo
           const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
           if (data.sendToTeachers) {
-            const teacherNotifDoc = await addDoc(collection(db, "notifications"), {
-              message: data.message,
-              type: data.notifType || "general",
-              scheduledDate: data.date,
-              scheduledTime: data.time || "",
-              forTeacher: data.teacherTarget || "all",
-              targetType: "teacher",
-              sentBy: "Admin",
-              sent: false,
-              createdAt: serverTimestamp(),
-            });
-            await updateDoc(doc(db, "scheduled_notifications", newDoc.id), { teacherNotifDocId: teacherNotifDoc.id });
+            const tNotif = await addDoc(collection(db, "notifications"), { message: data.message, type: data.notifType || "general", scheduledDate: data.date, scheduledTime: data.time || "", forTeacher: data.teacherTarget || "all", targetType: "teacher", sentBy: "Admin", sent: false, createdAt: serverTimestamp() });
+            await updateDoc(doc(db, "scheduled_notifications", newDoc.id), { teacherNotifDocId: tNotif.id });
           }
-          // Push notification bhejo parents ko
-          await sendPushToParents(data.message, null, data.target, data.notifType);
-          showMsg("Notification scheduled! Parents ke phone pe push bhi gaya 🔔" + (data.sendToTeachers ? " Teachers ko bhi bheja gaya." : ""));
+          showMsg("Notification scheduled successfully!");
         }
       }
       setShowNotifForm(false); setNotifForm({});
@@ -1837,30 +1983,25 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
 
   async function sendImmediateNotification() {
     if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
+    if (!notifForm.targetBatches?.length && !notifForm.target) { showMsg("Target is required!"); return; }
     setSaving(true);
     try {
-      const data = { ...notifForm, date: new Date().toISOString().split("T")[0], time: new Date().toLocaleTimeString("en-IN", { hour12: false, hour: "2-digit", minute: "2-digit" }) };
-      
-      // Save to Firebase first
+      const data = { 
+        ...notifForm, 
+        target: notifForm.targetBatches?.length > 0 ? notifForm.targetBatches.join(",") : notifForm.target,
+        date: new Date().toISOString().split("T")[0], 
+        time: new Date().toLocaleTimeString("en-IN", { hour12: false, hour: "2-digit", minute: "2-digit" }),
+        hideTime: true
+      };
       const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
-      
-      // Trigger API for immediate send
       const res = await fetch("/api/send-scheduled-notifications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          notifId: newDoc.id,
-          secret: "pid_cron_2026" // Using the standard secret
-        }),
+        body: JSON.stringify({ notifId: newDoc.id, secret: "pid_cron_2026" }),
       });
-      
       const result = await res.json();
-      if (result.success) {
-        showMsg(`Success! Push sent instantly to ${result.sentCount} devices 🚀`);
-        setShowNotifForm(false); setNotifForm({});
-      } else {
-        showMsg("API Error: " + (result.error || "Unknown error"));
-      }
+      if (result.success) { showMsg(`Success! Sent to ${result.sentCount} recipients.`); setShowNotifForm(false); setNotifForm({}); }
+      else { showMsg("Error: " + result.error); }
     } catch (e) { showMsg("System Error: " + e.message); }
     setSaving(false);
   }
@@ -2318,6 +2459,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
                       <optgroup label="Class 10th">{BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
                       <optgroup label="Class 9th">{BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
                       <optgroup label="Junior Classes">{BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
+                      <optgroup label="Entrance & Competition">{BATCH_OPTIONS.filter(b => ["Navodaya","Prayas","JEE-NEET"].includes(b.class)).map(b => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
                     </select>
                   </div>
                   <div>
@@ -2362,6 +2504,90 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             </div>
           </div>
 
+          {/* ═══ MANAGE CLASSES SECTION ═══ */}
+          <div style={{ ...s.card, border: "2px solid #059669", marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: classBatches.length > 0 || showClassForm ? 16 : 0, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 2, color: "#059669" }}><i className="fas fa-layer-group" style={{ marginRight: 8 }} />Manage Classes / Batches</h3>
+                <p style={{ fontSize: ".72rem", color: "#6B7F99", margin: 0 }}>Classes add/delete karo — automatic sabhi sections me update hoga ({classBatches.length} classes)</p>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {classBatches.length === 0 && <button onClick={seedDefaultClasses} disabled={saving} style={{ ...s.btnG, display: "flex", alignItems: "center", gap: 6 }}><i className="fas fa-database" />Load 24 Default Classes</button>}
+                <button onClick={() => { setShowClassForm(!showClassForm); setClassForm({}); }} style={{ ...s.btnP, background: showClassForm ? "#DC2626" : "#059669", display: "flex", alignItems: "center", gap: 6 }}>
+                  <i className={`fas ${showClassForm ? "fa-times" : "fa-plus"}`} />{showClassForm ? "Close" : "Add New Class"}
+                </button>
+              </div>
+            </div>
+
+            {/* Add Class Form */}
+            {showClassForm && (
+              <div style={{ background: "#F0FDF4", borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid #BBF7D0" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <div><label style={s.label}>Class Level *</label><input style={s.input} placeholder="e.g. 12th, 11th" value={classForm.class || ""} onChange={e => setClassForm({ ...classForm, class: e.target.value })} /></div>
+                  <div><label style={s.label}>Medium</label>
+                    <select style={s.input} value={classForm.medium || ""} onChange={e => setClassForm({ ...classForm, medium: e.target.value })}>
+                      <option value="">Select</option><option value="English">English</option><option value="Hindi">Hindi</option><option value="All">All</option>
+                    </select>
+                  </div>
+                  <div><label style={s.label}>Board</label>
+                    <select style={s.input} value={classForm.board || ""} onChange={e => setClassForm({ ...classForm, board: e.target.value })}>
+                      <option value="">Select</option><option value="CBSE">CBSE</option><option value="ICSE">ICSE</option><option value="CG">CG Board</option><option value="All">All</option>
+                    </select>
+                  </div>
+                  <div><label style={s.label}>Label *</label><input style={s.input} placeholder="e.g. 12th English (CBSE)" value={classForm.label || ""} onChange={e => setClassForm({ ...classForm, label: e.target.value })} /></div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <div><label style={s.label}>Short Label</label><input style={s.input} placeholder="e.g. 12 Eng CBSE" value={classForm.shortLabel || ""} onChange={e => setClassForm({ ...classForm, shortLabel: e.target.value })} /></div>
+                  <div><label style={s.label}>Color</label><input style={s.input} type="color" value={classForm.color || "#1349A8"} onChange={e => setClassForm({ ...classForm, color: e.target.value })} /></div>
+                  <div><label style={s.label}>Order</label><input style={s.input} type="number" placeholder="1" value={classForm.order || ""} onChange={e => setClassForm({ ...classForm, order: e.target.value })} /></div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={addClassBatch} disabled={saving} style={s.btnG}>{saving ? "Saving..." : "Add Class"}</button>
+                  <button onClick={() => { setShowClassForm(false); setClassForm({}); }} style={s.btnGray}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {/* Existing Classes List */}
+            {classBatches.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 10 }}>
+                {classBatches.map(cls => {
+                  const normalizeBoard = (b) => { if (!b) return ""; if (b === "CG Board") return "CG"; return b; };
+                  const studCount = students.filter(st => {
+                    const stClass = st.class || st.presentClass || "";
+                    if (cls.class === "JEE-NEET") return ["9th","10th","11th","12th"].includes(stClass);
+                    if (cls.class === "2nd-8th") return ["2nd","3rd","4th","5th","6th","7th","8th"].includes(stClass);
+                    const classMatch = stClass === cls.class;
+                    const mediumMatch = cls.medium === "All" || !st.medium || st.medium === cls.medium;
+                    const boardMatch = cls.board === "All" || !st.board || normalizeBoard(st.board) === cls.board;
+                    return classMatch && mediumMatch && boardMatch;
+                  }).length;
+                  const matCount = materials.filter(m => m.courseId === cls.value || m.forClass === cls.value).length;
+                  const canDelete = studCount === 0 && matCount === 0;
+                  return (
+                    <div key={cls.value} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderRadius: 10, border: "1px solid #E8EFF8", background: "#fff" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 8, height: 32, borderRadius: 4, background: cls.color }} />
+                        <div>
+                          <div style={{ fontSize: ".82rem", fontWeight: 700, color: "#1C2E44" }}>{cls.label}</div>
+                          <div style={{ fontSize: ".68rem", color: "#6B7F99" }}>
+                            <i className="fas fa-user-graduate" style={{ marginRight: 4 }} />{studCount}
+                            <span style={{ margin: "0 6px" }}>·</span>
+                            <i className="fas fa-book" style={{ marginRight: 4 }} />{matCount}
+                          </div>
+                        </div>
+                      </div>
+                      <button onClick={() => deleteClassBatch(cls.value)} disabled={!canDelete}
+                        title={canDelete ? "Delete" : `${studCount} students, ${matCount} materials`}
+                        style={{ ...s.btnD, padding: "6px 10px", opacity: canDelete ? 1 : 0.35, cursor: canDelete ? "pointer" : "not-allowed" }}
+                      ><i className="fas fa-trash" /></button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Course Form */}
           {showForm && <div style={{ ...s.card, border: "2px solid #1349A8" }}>
             <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 16, color: "#1349A8" }}><i className="fas fa-edit" style={{ marginRight: 8 }} />{editId ? "Edit" : "Add"} Course</h3>
@@ -2401,23 +2627,45 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
             {/* Teachers */}
             <div style={{ ...s.sectionTitle, marginTop: 16 }}><i className="fas fa-chalkboard-teacher" style={{ color: "#7C3AED" }} /> Teachers <button onClick={addTeacher} style={{ ...s.btnG, padding: "4px 10px", fontSize: ".72rem", marginLeft: 8 }}><i className="fas fa-plus" /> Add</button></div>
             {(form.teachers || []).map((t, i) => (
-              <div key={i} style={{ background: "#F8FAFD", borderRadius: 10, padding: 12, marginBottom: 10, border: "1px solid #E8EFF8" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
-                  <div><label style={s.label}>Name</label><input style={{ ...s.input, marginBottom: 0 }} placeholder="Mr. Temlal Patel" value={t.name} onChange={e => updateTeacher(i, "name", e.target.value)} /></div>
-                  <div><label style={s.label}>Subject</label><input style={{ ...s.input, marginBottom: 0 }} placeholder="Physics" value={t.subject} onChange={e => updateTeacher(i, "subject", e.target.value)} /></div>
-                  <div><label style={s.label}>Qualification</label><input style={{ ...s.input, marginBottom: 0 }} placeholder="BSc, MSc, B.Ed" value={t.qual} onChange={e => updateTeacher(i, "qual", e.target.value)} /></div>
-                  <div><label style={s.label}>Experience</label><input style={{ ...s.input, marginBottom: 0 }} placeholder="15 years" value={t.exp} onChange={e => updateTeacher(i, "exp", e.target.value)} /></div>
-                  <button onClick={() => removeTeacher(i)} style={{ ...s.btnD, padding: "8px", marginBottom: 0 }}><i className="fas fa-trash" /></button>
+              <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 8, alignItems: "center", background: "#F8FAFD", padding: "12px", borderRadius: 8, border: "1px solid #E8EFF8" }}>
+                <div style={{ flex: "1 1 200px" }}>
+                  <label style={{ ...s.label, marginBottom: 4 }}>Select Teacher</label>
+                  <select style={{ ...s.input, marginBottom: 0 }} value={t.teacherId || ""} onChange={e => {
+                    const selectedId = e.target.value;
+                    const newTeachers = [...form.teachers];
+                    if (!selectedId) {
+                       newTeachers[i] = { teacherId: "", name: "", subject: "", qual: "", exp: "", photo: "" };
+                    } else {
+                       const selectedTeacher = teachers.find(teach => teach.id === selectedId);
+                       if (selectedTeacher) {
+                         newTeachers[i] = {
+                           teacherId: selectedTeacher.id,
+                           name: selectedTeacher.name || "",
+                           subject: selectedTeacher.subject || "",
+                           qual: selectedTeacher.qualification || "",
+                           exp: selectedTeacher.experience || "",
+                           photo: selectedTeacher.photo || "",
+                         };
+                       }
+                    }
+                    setForm({ ...form, teachers: newTeachers });
+                  }}>
+                    <option value="">-- Choose a teacher --</option>
+                    {teachers.map(teach => <option key={teach.id} value={teach.id}>{teach.name} ({teach.subject})</option>)}
+                  </select>
                 </div>
-                <div style={{ marginTop: 8 }}>
-                  <ImageUploader
-                    folder="teachers"
-                    label="Teacher Photo"
-                    currentUrl={t.photo || ""}
-                    onUpload={(url) => updateTeacher(i, "photo", url)}
-                    onRemove={() => updateTeacher(i, "photo", "")}
-                  />
-                </div>
+                {t.photo && (
+                  <div style={{ width: 42, height: 42, borderRadius: 8, overflow: "hidden", border: "1px solid #D4DEF0" }}>
+                     <img src={t.photo} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  </div>
+                )}
+                {t.name && (
+                  <div style={{ flex: "1 1 150px", fontSize: ".82rem", color: "#4A5E78" }}>
+                    <strong style={{ color: "#0B1826" }}>{t.name}</strong><br/>
+                    <span style={{ fontSize: ".72rem", color: "#6B7F99" }}>{t.qual ? `${t.qual} • ` : ""}{t.exp ? `${t.exp}` : ""}</span>
+                  </div>
+                )}
+                <button onClick={() => removeTeacher(i)} style={{ ...s.btnD, padding: "10px", marginBottom: 0 }}><i className="fas fa-trash" /></button>
               </div>
             ))}
 
@@ -2780,20 +3028,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
         {/* ═══════════ LEAVE ALERTS TAB ═══════════ */}
         {tab === "ranks" && (() => {
           // ── Rankings Tab ──
-          const CLASS_CATS_R = [
-            { id: "all", label: "All Students" },
-            { id: "12th-Eng-CG", label: "12th English (CG)", class: "12th", medium: "English", boards: ["CG"] },
-            { id: "12th-Hindi-CG-CBSE", label: "12th Hindi (CG+CBSE)", class: "12th", medium: "Hindi", boards: ["CG","CBSE"] },
-            { id: "12th-Eng-CBSE-ICSE", label: "12th English (CBSE+ICSE)", class: "12th", medium: "English", boards: ["CBSE","ICSE"] },
-            { id: "11th-Eng-CG", label: "11th English (CG)", class: "11th", medium: "English", boards: ["CG"] },
-            { id: "11th-Hindi-CG-CBSE", label: "11th Hindi (CG+CBSE)", class: "11th", medium: "Hindi", boards: ["CG","CBSE"] },
-            { id: "10th-Eng-All", label: "10th English (All)", class: "10th", medium: "English", boards: ["CG","CBSE","ICSE"] },
-            { id: "10th-Hindi-CG-CBSE", label: "10th Hindi (CG+CBSE)", class: "10th", medium: "Hindi", boards: ["CG","CBSE"] },
-            { id: "9th-Eng-All", label: "9th English (All)", class: "9th", medium: "English", boards: ["CG","CBSE","ICSE"] },
-            { id: "9th-Hindi-CG-CBSE", label: "9th Hindi (CG+CBSE)", class: "9th", medium: "Hindi", boards: ["CG","CBSE"] },
-            { id: "2nd-8th-All", label: "2nd-8th All", class: "2nd-8th" },
-            { id: "JEE-NEET", label: "JEE-NEET" },
-          ];
+          const CLASS_CATS_R = [{ id: "all", label: "All Students" }, ...classBatches];
 
           function filterStudentsR(studs, catId) {
             if (catId === "all") return studs;
@@ -3372,9 +3607,30 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
               <div><label style={s.label}>Experience</label><input style={s.input} placeholder="e.g. 15 years" value={form.experience || ""} onChange={e => setForm({ ...form, experience: e.target.value })} /></div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div><label style={s.label}>Teaching Classes</label><input style={s.input} placeholder="e.g. Class 11 & 12" value={form.classes || ""} onChange={e => setForm({ ...form, classes: e.target.value })} /></div>
-              <div><label style={s.label}>Display Order</label><input style={s.input} type="number" placeholder="1, 2, 3..." value={form.order || ""} onChange={e => setForm({ ...form, order: parseInt(e.target.value) || 0 })} /></div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={s.label}>Teaching Classes</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, background: "#F8FAFD", padding: 12, borderRadius: 8, border: "1px solid #E8EFF8" }}>
+                {courses.length === 0 ? <span style={{ fontSize: ".8rem", color: "#6B7F99" }}>No courses available</span> : courses.map(c => {
+                  const selectedClasses = Array.isArray(form.classes) ? form.classes : (typeof form.classes === "string" && form.classes.trim() ? [form.classes] : []);
+                  const val = c.classId || c.id;
+                  const isChecked = selectedClasses.includes(val);
+                  return (
+                    <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: ".8rem", cursor: "pointer", background: isChecked ? "#EFF6FF" : "#fff", padding: "6px 10px", borderRadius: 6, border: isChecked ? "1.5px solid #1349A8" : "1px solid #D4DEF0" }}>
+                      <input type="checkbox" checked={isChecked} onChange={e => {
+                        let newArr = [...selectedClasses];
+                        if (e.target.checked && !newArr.includes(val)) newArr.push(val);
+                        else if (!e.target.checked) newArr = newArr.filter(v => v !== val);
+                        setForm({ ...form, classes: newArr });
+                      }} />
+                      {c.title}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+              <div style={{ flex: 1 }}><label style={s.label}>Display Order</label><input style={s.input} type="number" placeholder="1, 2, 3..." value={form.order || ""} onChange={e => setForm({ ...form, order: parseInt(e.target.value) || 0 })} /></div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -3767,7 +4023,7 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
 
             {/* Profile Photo + RFID */}
             <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-              <ImageUploader folder="students" label="Student Photo (Passport Size)" currentUrl={form.photo || ""} onUpload={(url) => setForm({ ...form, photo: url })} onRemove={() => setForm({ ...form, photo: "" })} />
+              <ImageUploader folder="teachers" label="Student Photo (Passport Size)" currentUrl={form.photo || ""} onUpload={(url) => setForm({ ...form, photo: url })} onRemove={() => setForm({ ...form, photo: "" })} />
               <div style={{ flex: 1, minWidth: 200 }}>
                 <label style={s.label}>RFID Number / Code (Digital Attendance) <i className="fas fa-id-card" style={{ color: "#7C3AED", fontSize: ".7rem" }} /></label>
                 <input style={{ ...s.input, borderColor: form.rfidCode ? "#86EFAC" : "#C0D0E8", fontFamily: "monospace", letterSpacing: 1 }} placeholder="Scan or enter RFID card number" value={form.rfidCode || ""} onChange={e => setForm({ ...form, rfidCode: e.target.value.toUpperCase().replace(/\s+/g, "").trim() })} />
@@ -4751,6 +5007,22 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                               if (isBeforeCard || isAfterCard) {
                                 return <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#F8FAFD" }}><span style={{ color: "#D4DEF0", fontSize: ".6rem" }}>·</span></td>;
                               }
+                              
+                              const tLeaveDay = teacherLeaves.find(lv => {
+                                if (lv.teacherEmail !== t.email && lv.teacherName !== t.name) return false;
+                                const fDate = parseDMY(lv.fromDate);
+                                const tDate = parseDMY(lv.toDate || lv.fromDate);
+                                return fDate <= d && tDate >= d;
+                              });
+
+                              if (tLeaveDay) {
+                                return (
+                                  <td key={d} style={{ padding: "4px 2px", textAlign: "center", background: "#FAF5FF", cursor: "pointer" }} onClick={() => alert("Teacher: " + t.name + "\\nLeave: " + tLeaveDay.fromDate + (tLeaveDay.toDate && tLeaveDay.toDate !== tLeaveDay.fromDate ? " to " + tLeaveDay.toDate : "") + "\\nReason: " + tLeaveDay.reason)}>
+                                    <span style={{ color: "#7C3AED", fontWeight: 800, fontSize: ".7rem" }} title={tLeaveDay.reason}>L</span>
+                                  </td>
+                                );
+                              }
+
                               totalWorking++;
                               const dayAtt = multiDayAtt.filter(a => (a.studentId === personKey || a.rfidCode === (t.rfidCode || `TEACHER_${t.id}`)) && a.date === d);
                               const hasIn = dayAtt.some(a => a.type === "in");
@@ -4842,17 +5114,18 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                         </td>
                         <td style={{ padding: "10px 14px", textAlign: "center" }}>
                           {(() => {
-                            const tLeave = teacherLeaves.find(lv =>
-  (lv.teacherEmail === t.email || lv.teacherName === t.name) &&
-  lv.fromDate <= attDate &&
-  (lv.toDate || lv.fromDate) >= attDate
-);
+                            const tLeave = teacherLeaves.find(lv => {
+                              if (lv.teacherEmail !== t.email && lv.teacherName !== t.name) return false;
+                              const fDate = parseDMY(lv.fromDate);
+                              const tDate = parseDMY(lv.toDate || lv.fromDate);
+                              return fDate <= attDate && tDate >= attDate;
+                            });
                             if (isHol) return <span style={s.badge("#D98D04", "#FEF3C7")}>Holiday</span>;
                             if (tPresent) return <span style={s.badge("#16A34A", "#F0FDF4")}>P</span>;
                             if (tLeave) return (
                               <div>
-                                <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: 99, fontSize: ".68rem", fontWeight: 800, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>🏖 Leave</span>
-                                <div style={{ fontSize: ".6rem", color: "#B45309", marginTop: 2, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tLeave.reason}>{tLeave.reason?.slice(0, 15)}{tLeave.reason?.length > 15 ? "..." : ""}</div>
+                                <span style={s.badge("#7C3AED", "#FAF5FF")}>L</span>
+                                <div onClick={() => alert("Teacher: " + t.name + "\\nLeave Date: " + tLeave.fromDate + (tLeave.toDate && tLeave.toDate !== tLeave.fromDate ? " to " + tLeave.toDate : "") + "\\nReason: " + tLeave.reason)} style={{ marginTop: 4, cursor: "pointer", fontSize: ".62rem", color: "#7C3AED", fontWeight: 600, background: "#FAF5FF", padding: "2px 6px", borderRadius: 4, border: "1px solid #E9D5FF", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }} title={tLeave.reason}>📝 {tLeave.reason?.slice(0, 10)}{tLeave.reason?.length > 10 ? "..." : ""}</div>
                               </div>
                             );
                             if (isAbsentManual) return <span style={s.badge("#DC2626", "#FEF2F2")}>A</span>;
@@ -5360,7 +5633,16 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                       return (
                         <tr key={st.id} style={{ borderBottom: "1px solid #E8EFF8", background: isExp ? "#FFF5F5" : idx % 2 === 0 ? "#fff" : "#FAFCFE" }}>
                           <td style={{ padding: "8px 10px", fontWeight: 600, color: "#6B7F99" }}>{idx + 1}</td>
-                          <td style={{ padding: "8px 10px", fontWeight: 600, color: isExp ? "#DC2626" : "#0B1826" }}>{st.studentName}</td>
+                          <td style={{ padding: "8px 10px", fontWeight: 600, color: isExp ? "#DC2626" : "#0B1826" }}>
+                            <div>{st.studentName}</div>
+                            <div style={{ fontSize: ".65rem", fontWeight: 500, color: "#6B7F99", marginTop: 2 }}>
+                              <i className="fas fa-book-open" style={{ marginRight: 4, fontSize: ".6rem" }} />
+                              {(() => {
+                                const subs = [st.subject1, st.subject2, st.subject3, st.subject4, st.subject5, st.subject6].filter(Boolean);
+                                return subs.length > 0 ? `${subs.length} Subjects: ${subs.join(", ")}` : "No subjects selected";
+                              })()}
+                            </div>
+                          </td>
                           <td style={{ padding: "8px 6px", textAlign: "center" }}><span style={s.badge("#1349A8", "#EFF6FF")}>{st.class}</span></td>
                           <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.medium || "—"}</td>
                           <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{st.board || "—"}</td>
@@ -5526,38 +5808,54 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
           {showNotifForm && (
             <div style={{ ...s.card, border: "2px solid #D98D04" }}>
               <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "#D98D04", marginBottom: 14 }}><i className="fas fa-bell" style={{ marginRight: 8 }} />Schedule Notification</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <div><label style={s.label}>Date *</label><input style={s.input} type="date" value={notifForm.date || ""} onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} /></div>
-                <div><label style={s.label}>Time to Send</label><input style={s.input} type="time" value={notifForm.time || ""} onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} /></div>
-                <div><label style={s.label}>Send To (Students)</label>
-                  <select style={s.input} value={notifForm.target || "all"} onChange={e => setNotifForm({ ...notifForm, target: e.target.value })}>
-                    <option value="all">All Students & Parents</option>
-                    <option value="students">All Students Only</option>
-                    <option value="parents">All Parents Only</option>
-                    <option value="teachers_all">🏫 All Teachers Only</option>
-                    <optgroup label="Class 12th">
-                      {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </optgroup>
-                    <optgroup label="Class 11th">
-                      {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </optgroup>
-                    <optgroup label="Class 10th">
-                      {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </optgroup>
-                    <optgroup label="Class 9th">
-                      {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </optgroup>
-                    <optgroup label="Junior Classes">
-                      {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </optgroup>
-                    <optgroup label="Entrance Coaching">
-                      {BATCH_OPTIONS.filter(b => b.class === "Navodaya" || b.class === "Prayas").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </optgroup>
-                  </select>
+              {/* ═══ TARGET SELECTION ═══ */}
+              <div style={{ background: "#F8FAFD", padding: 12, borderRadius: 10, border: "1px solid #C0D0E8", marginBottom: 12 }}>
+                <label style={s.label}>Send To (Multiple Batches Allowed)</label>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                  {["all", "students", "parents", "teachers_all"].map(t => (
+                    <button key={t} onClick={() => setNotifForm({ ...notifForm, target: t, targetBatches: [] })}
+                      style={{ padding: "6px 12px", borderRadius: 20, fontSize: ".7rem", fontWeight: 700, border: "1.5px solid", cursor: "pointer", 
+                        background: notifForm.target === t ? "#1349A8" : "#fff", color: notifForm.target === t ? "#fff" : "#1349A8", borderColor: "#1349A8" }}>
+                      {t === "all" ? "All (Everyone)" : t === "students" ? "All Students" : t === "parents" ? "All Parents" : "All Teachers"}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ maxHeight: 180, overflowY: "auto", background: "#fff", padding: 10, borderRadius: 8, border: "1px solid #E8EFF8" }}>
+                  {[...new Set(BATCH_OPTIONS.map(b => b.class))].map(className => (
+                    <div key={className} style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: ".72rem", fontWeight: 800, color: "#1349A8", borderBottom: "1px solid #F0F4FA", paddingBottom: 4, marginBottom: 6, textTransform: "uppercase" }}>{className}</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                        {BATCH_OPTIONS.filter(b => b.class === className).map(b => {
+                          const isChecked = notifForm.targetBatches?.includes(b.value);
+                          return (
+                            <label key={b.value} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                              <input type="checkbox" checked={isChecked || false} 
+                                onChange={e => {
+                                  const list = [...(notifForm.targetBatches || [])];
+                                  if (e.target.checked) list.push(b.value);
+                                  else { const idx = list.indexOf(b.value); if (idx > -1) list.splice(idx, 1); }
+                                  setNotifForm({ ...notifForm, targetBatches: list, target: list.length > 0 ? "" : "all" });
+                                }}
+                                style={{ width: 14, height: 14 }} />
+                              <span style={{ fontSize: ".72rem", color: "#4A5E78" }}>{b.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
+
+              {/* ═══ DATE & TIME ═══ */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <div><label style={s.label}>Scheduled Date *</label><input style={s.input} type="date" value={notifForm.date || ""} onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} /></div>
+                <div><label style={s.label}>Scheduled Time</label><input style={s.input} type="time" value={notifForm.time || ""} onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} /></div>
+              </div>
+
               {/* ═══ TEACHER NOTIFICATION SECTION ═══ */}
-              <div style={{ background: "#FAF5FF", borderRadius: 10, border: "1px solid #E9D5FF", padding: "12px 14px", marginBottom: 4 }}>
+              <div style={{ background: "#FAF5FF", borderRadius: 10, border: "1px solid #E9D5FF", padding: "12px 14px", marginBottom: 12 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: notifForm.sendToTeachers ? 10 : 0 }}>
                   <input type="checkbox" checked={notifForm.sendToTeachers || false}
                     onChange={e => setNotifForm({ ...notifForm, sendToTeachers: e.target.checked, teacherTarget: "all" })}
@@ -5578,19 +5876,15 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                         </option>
                       ))}
                     </select>
-                    <p style={{ fontSize: ".7rem", color: "#7C3AED", margin: "-6px 0 0" }}>
-                      <i className="fas fa-info-circle" style={{ marginRight: 4 }} />
-                      Ye notification Teacher App mein bell icon pe dikhega
-                    </p>
                   </div>
                 )}
               </div>
+
               <div><label style={s.label}>Notification Type</label>
                 <select style={s.input} value={notifForm.notifType || ""} onChange={e => {
                   const val = e.target.value;
                   if (val === "fee") {
-                    // Fee Reminder = auto set to parents only
-                    setNotifForm({ ...notifForm, notifType: val, target: notifForm.target === "all" || notifForm.target === "students" ? "parents" : notifForm.target, isFeeReminder: true });
+                    setNotifForm({ ...notifForm, notifType: val, isFeeReminder: true });
                   } else {
                     setNotifForm({ ...notifForm, notifType: val, isFeeReminder: false });
                   }
@@ -5609,39 +5903,21 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                   <div style={{ color: "#78350F", lineHeight: 1.6, fontSize: ".76rem" }}>
                     <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Fee reminder <strong>sirf Parents</strong> ke paas jaayega (auto-selected)<br/>
                     <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Har parent ko unke <strong>bachche ka pending fee amount</strong> dikhega<br/>
-                    <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Upar "Send To" se <strong>specific batch</strong> select karo ya "All Parents" rakho
+                    <i className="fas fa-check-circle" style={{ color: "#16A34A", marginRight: 4 }} />Upar "Target" se <strong>multiple batches</strong> select kar sakte hain
                   </div>
-                  {/* Preview of fee data for selected batch */}
+                  {/* Preview fee counts */}
                   {(() => {
                     let feeStudents = students.filter(x => x.status === "active");
-                    if (notifForm.target && notifForm.target !== "all" && notifForm.target !== "parents" && notifForm.target !== "students") {
+                    const targetBatches = notifForm.targetBatches || [];
+                    if (targetBatches.length > 0) {
+                      feeStudents = feeStudents.filter(st => targetBatches.some(b => matchesBatch(st, b)));
+                    } else if (notifForm.target && notifForm.target !== "all" && notifForm.target !== "parents" && notifForm.target !== "students") {
                       feeStudents = filterByBatch(feeStudents, notifForm.target);
                     }
-                    const withDue = feeStudents.filter(st => {
-                      const total = Number(st.totalFee || 0);
-                      const paid = Number(st.enrollmentFeePaid || 0);
-                      return total > 0 && paid < total;
-                    });
-                    const totalDue = withDue.reduce((sum, st) => sum + (Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0)), 0);
+                    const withDue = feeStudents.filter(st => (Number(st.totalFee || 0) - (Number(st.enrollmentFeePaid || 0))) > 0);
                     return (
-                      <div style={{ marginTop: 10, padding: 10, background: "#fff", borderRadius: 8, border: "1px solid #FDE68A" }}>
-                        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: ".74rem" }}>
-                          <span><strong style={{ color: "#DC2626" }}>{withDue.length}</strong> students with pending fees</span>
-                          <span>Total due: <strong style={{ color: "#DC2626" }}>₹{totalDue.toLocaleString("en-IN")}</strong></span>
-                        </div>
-                        {withDue.length > 0 && withDue.length <= 10 && (
-                          <div style={{ marginTop: 8, fontSize: ".7rem", color: "#4A5E78" }}>
-                            {withDue.map(st => {
-                              const due = Number(st.totalFee || 0) - Number(st.enrollmentFeePaid || 0);
-                              return (
-                                <div key={st.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #FEF3C7" }}>
-                                  <span>{st.studentName} ({st.class})</span>
-                                  <span style={{ color: "#DC2626", fontWeight: 700 }}>₹{due.toLocaleString("en-IN")} due</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                      <div style={{ marginTop: 10, padding: 8, background: "#fff", borderRadius: 8, border: "1px solid #FDE68A", fontSize: ".74rem" }}>
+                        <strong style={{ color: "#DC2626" }}>{withDue.length}</strong> recipients with pending balance found.
                       </div>
                     );
                   })()}
@@ -7287,11 +7563,18 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                         <td style={{ padding: "10px 14px" }}>
                           <div style={{ fontWeight: 600 }}>{st.studentName}</div>
                           <div style={{ fontSize: ".7rem", color: "#6B7F99" }}>{st.studentPhone}</div>
+                          <div style={{ fontSize: ".65rem", fontWeight: 500, color: "#6B7F99", marginTop: 2 }}>
+                            <i className="fas fa-book-open" style={{ marginRight: 4, fontSize: ".6rem" }} />
+                            {(() => {
+                              const subs = [st.subject1, st.subject2, st.subject3, st.subject4, st.subject5, st.subject6].filter(Boolean);
+                              return subs.length > 0 ? `${subs.length} Subjects: ${subs.join(", ")}` : "No subjects selected";
+                            })()}
+                          </div>
                           {instsDone > 0 && (
-                            <div style={{ fontSize: ".68rem", color: "#1349A8", marginTop: 2 }}>
+                            <div style={{ fontSize: ".68rem", color: "#1349A8", marginTop: 2, display: "flex", flexWrap: "wrap", gap: 4 }}>
                               {[inst1,inst2,inst3].map((amt, i) => amt > 0 ? (
-                                <span key={i} style={{ marginRight: 6, background: "#EFF6FF", borderRadius: 4, padding: "1px 5px" }}>
-                                  Inst{i+1}: ₹{amt.toLocaleString("en-IN")}
+                                <span key={i} style={{ background: "#EFF6FF", borderRadius: 4, padding: "1px 5px", border: "1px solid #D4DEF0" }}>
+                                  Inst {i+1}: ₹{amt.toLocaleString("en-IN")}
                                 </span>
                               ) : null)}
                             </div>

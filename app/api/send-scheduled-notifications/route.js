@@ -102,7 +102,7 @@ export async function GET(req) {
             priority: "high",
             channelId: "pid_alerts",
             _contentAvailable: true,
-            data: { type: n.notifType || n.type || "general", notifId: n.id },
+            data: { type: n.notifType || n.type || "general", notifId: n.id, displayMode: "popup" },
           }));
 
           for (let i = 0; i < expoMessages.length; i += 100) {
@@ -155,148 +155,197 @@ export async function POST(req) {
     if (!docSnap.exists) return NextResponse.json({ error: "Notification not found" }, { status: 404 });
 
     const n = { id: docSnap.id, ...docSnap.data() };
-    const tokenData = await getTargetTokens(db, n);
+    const isFeePersonalized = n.isFeePersonalized || reqData.isFeePersonalized;
+    
+    // Get target recipients (with potential personalization)
+    const targets = await getTargetRecipients(db, n, isFeePersonalized);
 
-    if (tokenData.expo.length === 0 && tokenData.native.length === 0) {
-      return NextResponse.json({ error: "No target tokens found" });
+    if (targets.length === 0) {
+      return NextResponse.json({ error: "No target recipients found" });
     }
 
-    const title = n.title || getTitleByType(n.notifType || n.type);
-    const body = n.message || "";
+    const baseTitle = n.title || getTitleByType(n.notifType || n.type);
+    const baseBody = n.message || "";
+    let sentCount = 0;
 
-    // ─── Path 1: Native FCM (Direct) ───
-    if (tokenData.native.length > 0) {
-      try {
-        const fcmMessages = tokenData.native.map(token => ({
-          token: token,
-          notification: { title, body },
-          android: {
-            priority: "high",
-            notification: { channelId: "pid_alerts", sound: "default" }
-          },
-          data: { 
-            type: n.notifType || n.type || "general", 
-            notifId: n.id 
+    // Send individually if personalized, else broadcast
+    for (const recipient of targets) {
+      const title = baseTitle;
+      const body = isFeePersonalized ? baseBody.replace("{amount}", recipient.amount || "0") : (recipient.message || baseBody);
+      const tokens = recipient.tokens;
+
+      // ─── Path 1: Native FCM ───
+      if (tokens.native.length > 0) {
+        try {
+          const fcmMessages = tokens.native.map(token => ({
+            token,
+            notification: { title, body },
+            android: { priority: "high", notification: { channelId: "pid_alerts", sound: "default" } },
+            data: { type: n.notifType || n.type || "general", notifId: n.id, displayMode: "popup" }
+          }));
+          for (let i = 0; i < fcmMessages.length; i += 500) {
+            await admin.messaging().sendEach(fcmMessages.slice(i, i + 500));
           }
-        }));
-        for (let i = 0; i < fcmMessages.length; i += 500) {
-          await admin.messaging().sendEach(fcmMessages.slice(i, i + 500));
-        }
-      } catch (e) { console.error("FCM Direct Error:", e); }
+        } catch (e) { console.error("FCM Error:", e); }
+      }
+
+      // ─── Path 2: Expo Push ───
+      if (tokens.expo.length > 0) {
+        try {
+          const expoMessages = tokens.expo.map(token => ({
+            to: token, title, body, sound: "default", priority: "high", channelId: "pid_alerts",
+            _contentAvailable: true, data: { type: n.notifType || n.type || "general", notifId: n.id },
+          }));
+          for (let i = 0; i < expoMessages.length; i += 100) {
+            await fetch("https://exp.host/--/api/v2/push/send", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(expoMessages.slice(i, i + 100)),
+            });
+          }
+        } catch (e) { console.error("Expo Error:", e); }
+      }
+      sentCount += tokens.native.length + tokens.expo.length;
     }
 
-    // ─── Path 2: Expo Push (Fallback) ───
-    if (tokenData.expo.length > 0) {
-      try {
-        const expoPushUrl = "https://exp.host/--/api/v2/push/send";
-        const expoMessages = tokenData.expo.map(token => ({
-          to: token,
-          title, body,
-          sound: "default",
-          priority: "high",
-          channelId: "pid_alerts",
-          _contentAvailable: true,
-          data: { type: n.notifType || n.type || "general", notifId: n.id },
-        }));
-        for (let i = 0; i < expoMessages.length; i += 100) {
-          await fetch(expoPushUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(expoMessages.slice(i, i + 100)),
-          });
-        }
-      } catch (e) { console.error("Expo Fallback Error:", e); }
-    }
-
-    const totalSent = tokenData.native.length + tokenData.expo.length;
-    await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount: totalSent });
-    return NextResponse.json({ success: true, sentCount: totalSent });
+    await docRef.update({ sent: true, sentAt: new Date().toISOString(), sentCount });
+    return NextResponse.json({ success: true, sentCount });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
 
-async function getTargetTokens(db, n) {
-  const target = n.forClass || n.target || "all";
-  let expo = [];
-  let native = [];
+async function getTargetRecipients(db, n, isFeePersonalized) {
+  let targetRaw = n.forClass || n.target || "all";
+  const targets = (typeof targetRaw === "string" && targetRaw.includes(",")) ? targetRaw.split(",") : [targetRaw];
+  const recipients = [];
 
-  const add = (data) => {
-    // Parent tokens
+  const getTokens = (data) => {
+    const native = [];
+    const expo = [];
     if (data.parentNativeFcmToken) native.push(data.parentNativeFcmToken);
-    if (data.parentNativeToken) native.push(data.parentNativeToken); // check variations
+    if (data.parentNativeToken) native.push(data.parentNativeToken);
     if (data.parentPushToken) expo.push(data.parentPushToken);
-
-    // Student/Admin/Teacher tokens
     if (data.nativeFcmToken) native.push(data.nativeFcmToken);
     if (data.expoPushToken) expo.push(data.expoPushToken);
+    return {
+      native: [...new Set(native)],
+      expo: [...new Set(expo)]
+    };
   };
 
+  // Case 1: Specific Student (Result Notification)
+  if (target === "specific" && n.specificStudentId) {
+    const doc = await db.collection("students").doc(n.specificStudentId).get();
+    if (doc.exists) {
+      recipients.push({ tokens: getTokens(doc.data()) });
+    }
+    return recipients;
+  }
+
+  // Case 2: Broadcasters / Batches
   if (target === "teachers_all") {
     const snap = await db.collection("teachers").get();
-    snap.docs.forEach(d => add(d.data()));
+    snap.docs.forEach(d => {
+      const tokens = getTokens(d.data());
+      if (tokens.native.length || tokens.expo.length) recipients.push({ tokens });
+    });
   } else {
+    // Optimized: Fetch all students
     const studentsSnap = await db.collection("students").where("status", "==", "active").get();
+    
+    // Fetch payments if personalized fee
+    let payments = [];
+    if (isFeePersonalized) {
+      const pSnap = await db.collection("fee_payments").get();
+      payments = pSnap.docs.map(d => d.data());
+    }
+
     studentsSnap.docs.forEach(d => {
       const st = d.data();
-      if (target !== "all" && target !== "students" && target !== "parents") {
-        if (!matchesBatch(st, target)) return;
+      st.id = d.id;
+
+      // Class filtering (Supports array of targets)
+      if (!targets.includes("all") && !targets.includes("students") && !targets.includes("parents")) {
+        const matchesAny = targets.some(t => matchesBatch(st, t));
+        if (!matchesAny) return;
       }
 
-      if (target === "students") {
-        if (st.nativeFcmToken) native.push(st.nativeFcmToken);
-        if (st.expoPushToken) expo.push(st.expoPushToken);
-      } else if (target === "parents") {
-        if (st.parentNativeFcmToken) native.push(st.parentNativeFcmToken);
-        if (st.parentNativeToken) native.push(st.parentNativeToken);
-        if (st.parentPushToken) expo.push(st.parentPushToken);
-      } else {
-        add(st);
+      // Fee filtering
+      let balance = 0;
+      if (isFeePersonalized) {
+        const total = Number(st.totalFee || 0);
+        const paid = payments
+          .filter(p => p.studentId === st.id)
+          .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+        balance = total - paid;
+        if (balance <= 0) return; // Skip if no balance
+      }
+
+      const tokens = getTokens(st);
+      if (tokens.native.length || tokens.expo.length) {
+        recipients.push({ 
+          tokens, 
+          amount: balance.toString()
+        });
       }
     });
   }
 
-  return {
-    expo: [...new Set(expo)],
-    native: [...new Set(native)]
-  };
+  // Group by identical combinations (tokens + amount) to minimize push requests
+  if (!isFeePersonalized) {
+    const combinedTokens = { native: [], expo: [] };
+    recipients.forEach(r => {
+      combinedTokens.native.push(...r.tokens.native);
+      combinedTokens.expo.push(...r.tokens.expo);
+    });
+    return [{ tokens: { native: [...new Set(combinedTokens.native)], expo: [...new Set(combinedTokens.expo)] } }];
+  }
+
+  return recipients;
 }
 
 function matchesBatch(student, batchValue) {
+  // 1. Special hardcoded batches
+  const specialMap = {
+    "2nd-8th-All": ["2nd","3rd","4th","5th","6th","7th","8th"],
+    "JEE-NEET": ["9th", "10th", "11th", "12th"],
+    "Navodaya": "5th",
+    "Prayas": "8th",
+  };
+
+  if (specialMap[batchValue]) {
+    const targetClass = specialMap[batchValue];
+    if (Array.isArray(targetClass)) return targetClass.includes(student.class);
+    if (batchValue === "Navodaya") return student.class === "5th" || student.courseId === "navodaya";
+    if (batchValue === "Prayas") return student.class === "8th" || student.courseId === "prayas";
+    return student.class === targetClass;
+  }
+
+  // 2. Dynamic matching by value (e.g., "12th-Eng-CBSE")
+  if (batchValue.includes("-")) {
+    const [c, m, b] = batchValue.split("-");
+    if (student.class !== c) return false;
+    if (m && m !== "All" && student.medium !== (m === "Eng" ? "English" : m === "Hin" ? "Hindi" : m)) return false;
+    const studentBoard = student.board === "CG Board" ? "CG" : student.board;
+    if (b && b !== "All" && studentBoard !== b) return false;
+    return true;
+  }
+
+  // 3. Fallback to older class map
   const classMap = {
     "12th-Eng-CBSE-ICSE": { class: "12th", medium: "English", boards: ["CBSE","ICSE"] },
     "12th-Hindi-CG-CBSE": { class: "12th", medium: "Hindi", boards: ["CG","CBSE"] },
-    "12th-Eng-CG":         { class: "12th", medium: "English", boards: ["CG"] },
     "11th-Eng-CBSE-ICSE": { class: "11th", medium: "English", boards: ["CBSE","ICSE"] },
     "11th-Hindi-CG-CBSE": { class: "11th", medium: "Hindi", boards: ["CG","CBSE"] },
-    "11th-Eng-CG":         { class: "11th", medium: "English", boards: ["CG"] },
     "10th-Eng-All":        { class: "10th", medium: "English", boards: ["CG","CBSE","ICSE"] },
     "10th-Hindi-CG-CBSE": { class: "10th", medium: "Hindi", boards: ["CG","CBSE"] },
     "9th-Eng-All":         { class: "9th",  medium: "English", boards: ["CG","CBSE","ICSE"] },
     "9th-Hindi-CG-CBSE":  { class: "9th",  medium: "Hindi",   boards: ["CG","CBSE"] },
-    "2nd-8th-All":        { class: "2nd-8th" },
-    "JEE-NEET":           { class: "JEE-NEET" },
-    "Navodaya":           { class: "Navodaya" },
-    "Prayas":             { class: "Prayas" },
   };
   const batch = classMap[batchValue];
   if (!batch) return true;
 
-  // Custom logic for special batches
-  if (batchValue === "2nd-8th-All") {
-    return ["2nd","3rd","4th","5th","6th","7th","8th"].includes(student.class);
-  }
-  if (batchValue === "JEE-NEET") {
-    return ["9th", "10th", "11th", "12th"].includes(student.class);
-  }
-  if (batchValue === "Navodaya") {
-    return student.class === "5th" || student.courseId === "navodaya";
-  }
-  if (batchValue === "Prayas") {
-     return student.class === "8th" || student.courseId === "prayas";
-  }
-
-  // Standard class/medium/board matching
   if (student.class !== batch.class) return false;
   if (batch.medium && student.medium !== batch.medium) return false;
   const nb = student.board === "CG Board" ? "CG" : student.board;
