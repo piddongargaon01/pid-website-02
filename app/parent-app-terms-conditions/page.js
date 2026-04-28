@@ -52,7 +52,7 @@ export default function ParentAppTerms() {
             <h2 style={{ fontFamily: "'Nunito', sans-serif", fontSize: "1.3rem", fontWeight: 800, color: "#060D18", marginTop: 32, marginBottom: 12 }}>5. Contact Us</h2>
             <div style={{ background: "#F0F4FA", padding: 20, borderRadius: 12, border: "1px solid #D4DEF0" }}>
               <p style={{ marginBottom: 8 }}><strong>Patel Institute Dongargaon</strong></p>
-              <p style={{ marginBottom: 8 }}><i className="fas fa-envelope" style={{ color: "#1349A8", width: 24 }}/> patelinstitutedongargaon1234@gmail.com</p>
+              <p style={{ marginBottom: 8, wordBreak: 'break-all' }}><i className="fas fa-envelope" style={{ color: "#1349A8", width: 24 }}/> patelinstitutedongargaon1234@gmail.com</p>
               <p><i className="fas fa-phone" style={{ color: "#1349A8", width: 24 }}/> +91 8319002877, +91 7470412110</p>
             </div>
           </div>

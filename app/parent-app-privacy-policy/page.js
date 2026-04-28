@@ -57,7 +57,7 @@ export default function ParentAppPrivacyPolicy() {
             <p style={{ marginBottom: 12 }}>For transparency regarding data practices, contact the administration:</p>
             <div style={{ background: "#F0F4FA", padding: 20, borderRadius: 12, border: "1px solid #D4DEF0" }}>
               <p style={{ marginBottom: 8 }}><strong>Patel Institute Dongargaon</strong></p>
-              <p style={{ marginBottom: 8 }}><i className="fas fa-envelope" style={{ color: "#1349A8", width: 24 }}/> patelinstitutedongargaon1234@gmail.com</p>
+              <p style={{ marginBottom: 8, wordBreak: 'break-all' }}><i className="fas fa-envelope" style={{ color: "#1349A8", width: 24 }}/> patelinstitutedongargaon1234@gmail.com</p>
             </div>
           </div>
         </div>

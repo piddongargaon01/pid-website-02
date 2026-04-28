@@ -63,7 +63,7 @@ export default function PrivacyPolicy() {
             <p style={{ marginBottom: 12 }}>If you have questions or comments about this notice, you may contact us at:</p>
             <div style={{ background: "#F0F4FA", padding: 20, borderRadius: 12, border: "1px solid #D4DEF0" }}>
               <p style={{ marginBottom: 8 }}><strong>Patel Institute Dongargaon</strong></p>
-              <p style={{ marginBottom: 8 }}><i className="fas fa-envelope" style={{ color: "#1349A8", width: 24 }}/> patelinstitutedongargaon1234@gmail.com</p>
+              <p style={{ marginBottom: 8, wordBreak: 'break-all' }}><i className="fas fa-envelope" style={{ color: "#1349A8", width: 24 }}/> patelinstitutedongargaon1234@gmail.com</p>
               <p style={{ marginBottom: 8 }}><i className="fas fa-phone" style={{ color: "#1349A8", width: 24 }}/> +91 8319002877, +91 7470412110</p>
               <p><i className="fas fa-map-marker-alt" style={{ color: "#1349A8", width: 24 }}/> Matiya Road, Near Saket Dham Parisar, Dongargaon, Dist. Rajnandgaon, CG - 491445</p>
             </div>

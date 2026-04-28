@@ -8,6 +8,53 @@ import Link from "next/link";
 
 const ADMIN_EMAILS = ["rkp042010@gmail.com","patelinstitutedongargaon1234@gmail.com","piddongargaon01@gmail.com"];
 
+function prettifyClassToken(value) {
+  const token = String(value || "").trim();
+  if (!token) return "";
+  if (/^\d{1,2}$/.test(token)) return `Class ${token}th`;
+  if (/^\d{1,2}(st|nd|rd|th)$/i.test(token)) return `Class ${token}`;
+  if (/^class\s+/i.test(token)) return token.replace(/\s+/g, " ").replace(/^class/i, "Class");
+  if (/^(navodaya|prayas|jee-?neet|2nd-8th)$/i.test(token)) return token.toUpperCase() === "JEE-NEET" ? "JEE-NEET" : token;
+  return token;
+}
+
+function getTeacherClassesDisplay(teacher, classBatches, courses) {
+  const batches = Array.isArray(classBatches) ? classBatches : [];
+  const allCourses = Array.isArray(courses) ? courses : [];
+
+  const classIdToLabel = new Map();
+  batches.forEach(b => {
+    if (!b) return;
+    if (b.value) classIdToLabel.set(String(b.value), b.class ? `Class ${b.class}` : (b.label || b.value));
+    if (b.id) classIdToLabel.set(String(b.id), b.class ? `Class ${b.class}` : (b.label || b.id));
+  });
+  allCourses.forEach(c => {
+    if (!c) return;
+    const id = String(c.classId || c.id || "");
+    if (id) classIdToLabel.set(id, c.title || c.classId || c.id);
+  });
+
+  const rawList = Array.isArray(teacher?.classes)
+    ? teacher.classes
+    : String(teacher?.classes || "").split(/[,\n|;/]+/g);
+
+  const out = [];
+  rawList.map(v => String(v || "").trim()).filter(Boolean).forEach(item => {
+    if (classIdToLabel.has(item)) {
+      out.push(prettifyClassToken(classIdToLabel.get(item)));
+      return;
+    }
+    const matches = item.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?|navodaya|prayas|jee-?neet|2nd-8th)\b/gi);
+    if (matches?.length) {
+      matches.forEach(m => out.push(prettifyClassToken(m.match(/^\d{1,2}$/) ? `${m}th` : m)));
+    }
+  });
+
+  const clean = [...new Set(out.filter(Boolean))];
+  if (clean.length > 0) return clean.join(", ");
+  return Array.isArray(teacher?.classes) ? teacher.classes.join(", ") : (teacher?.classes || "—");
+}
+
 // ═══════════════════════════════════════════
 // IMAGE UPLOADER COMPONENT (Reusable)
 // ═══════════════════════════════════════════
@@ -618,11 +665,23 @@ export default function AdminPanel() {
     unsubs.push(onSnapshot(collection(db, "class_batches"), s => {
       const arr = s.docs.map(d => {
         const data = d.data();
+        let bLabel = data.label || "";
+        if (data.class && (data.medium || data.board)) {
+          bLabel = `${data.class} ${data.medium || ""} ${data.board || ""}`.replace(/\s+/g, " ").trim();
+        }
+        // Short label for buttons/badges
+        let sLabel = data.shortLabel || data.label || "";
+        if (data.class && (data.medium || data.board)) {
+          // Format: "12th Eng CG" or similar
+          const mShort = data.medium === "English" ? "Eng" : data.medium === "Hindi" ? "Hin" : data.medium || "";
+          const bShort = data.board === "CG Board" ? "CG" : data.board === "CBSE" ? "CBSE" : data.board || "";
+          sLabel = `${data.class} ${mShort} ${bShort}`.replace(/\s+/g, " ").trim();
+        }
         return {
           id: data.value || d.id,
           value: data.value || d.id,
-          label: data.label || "",
-          shortLabel: data.shortLabel || data.label || "",
+          label: bLabel,
+          shortLabel: sLabel,
           class: data.class || "",
           medium: data.medium || "All",
           board: data.board || "",
@@ -3733,7 +3792,7 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                 <div style={{ fontSize: ".78rem", color: "#4A5E78", display: "flex", flexWrap: "wrap", gap: 12 }}>
                   {t.qualification && <span><i className="fas fa-graduation-cap" style={{ marginRight: 4, color: "#6B7F99" }} />{t.qualification}</span>}
                   {t.experience && <span><i className="fas fa-briefcase" style={{ marginRight: 4, color: "#6B7F99" }} />{t.experience}</span>}
-                  {t.classes && <span><i className="fas fa-chalkboard" style={{ marginRight: 4, color: "#6B7F99" }} />{t.classes}</span>}
+                  {t.classes && <span><i className="fas fa-chalkboard" style={{ marginRight: 4, color: "#6B7F99" }} />{getTeacherClassesDisplay(t, classBatches, courses)}</span>}
                   {t.rfidCode && <span><i className="fas fa-id-card" style={{ marginRight: 4, color: "#7C3AED" }} /><span style={{ fontFamily: "monospace", fontSize: ".72rem" }}>{t.rfidCode}</span></span>}
                   {t.email && <span><i className="fas fa-envelope" style={{ marginRight: 4, color: "#DC2626" }} />{t.email}</span>}
                 </div>
@@ -3899,8 +3958,25 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
           {!showForm && <>
             <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
               <select style={{ ...s.input, width: 180 }} value={matCourse} onChange={e => setMatCourse(e.target.value)}>
-                <option value="">All Courses</option>
-                {courses.map(c => <option key={c.id} value={c.classId || c.id}>{c.title}</option>)}
+                <option value="">All Courses / Batches</option>
+                <optgroup label="Class 12th">
+                  {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </optgroup>
+                <optgroup label="Class 11th">
+                  {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </optgroup>
+                <optgroup label="Class 10th">
+                  {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </optgroup>
+                <optgroup label="Class 9th">
+                  {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </optgroup>
+                <optgroup label="Junior Classes">
+                  {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </optgroup>
+                <optgroup label="Entrance Coaching">
+                  {BATCH_OPTIONS.filter(b => ["Navodaya", "Prayas"].includes(b.class)).map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </optgroup>
               </select>
               <input style={{ ...s.input, flex: 1, minWidth: 150 }} placeholder="Filter by subject..." value={matSubject} onChange={e => setMatSubject(e.target.value)} />
               <select style={{ ...s.input, width: 160 }} value={matType} onChange={e => setMatType(e.target.value)}>
@@ -4190,9 +4266,53 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
             {/* ── CLASS AND SUBJECT DETAIL ── */}
             <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-book" style={{ color: "#1349A8" }} /> Class & Subject Details</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <div><label style={s.label}>Class *</label><select style={s.input} value={form.class || ""} onChange={e => setForm({ ...form, class: e.target.value })}><option value="">Select</option><option>2nd</option><option>3rd</option><option>4th</option><option>5th</option><option>6th</option><option>7th</option><option>8th</option><option>9th</option><option>10th</option><option>11th</option><option>12th</option></select></div>
-              <div><label style={s.label}>Medium</label><select style={s.input} value={form.medium || ""} onChange={e => setForm({ ...form, medium: e.target.value })}><option value="">Select</option><option>Hindi</option><option>English</option></select></div>
-              <div><label style={s.label}>Board</label><select style={s.input} value={form.board || ""} onChange={e => setForm({ ...form, board: e.target.value })}><option value="">Select</option><option>CG Board</option><option>CBSE</option><option>ICSE</option></select></div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={s.label}>Batch / Class *</label>
+                <select style={{ ...s.input, border: "2px solid #059669" }} value={form.batchId || ""} onChange={e => {
+                  const val = e.target.value;
+                  const batch = BATCH_OPTIONS.find(b => b.value === val);
+                  if (batch) {
+                    setForm({ ...form, batchId: val, class: batch.class, medium: batch.medium, board: batch.board });
+                  } else {
+                    setForm({ ...form, batchId: val });
+                  }
+                }}>
+                  <option value="">Select Batch (Medium - Board)</option>
+                  <optgroup label="Class 12th">
+                    {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Class 11th">
+                    {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Class 10th">
+                    {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Class 9th">
+                    {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Junior Classes">
+                    {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Entrance Coaching">
+                    {BATCH_OPTIONS.filter(b => ["Navodaya", "Prayas"].includes(b.class)).map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                  <optgroup label="Other Batches">
+                    {BATCH_OPTIONS.filter(b => !["12th", "11th", "10th", "9th", "2nd-8th", "Navodaya", "Prayas"].includes(b.class)).map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                  </optgroup>
+                </select>
+              </div>
+              <div style={{ display: "none" }}>
+                {/* Hidden fields to keep state if needed, but they are already in the 'form' object */}
+                <input value={form.class || ""} readOnly />
+                <input value={form.medium || ""} readOnly />
+                <input value={form.board || ""} readOnly />
+              </div>
+              <div>
+                <label style={s.label}>Selected Details</label>
+                <div style={{ padding: "9px 12px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: ".72rem", color: "#6B7F99", minHeight: 38, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                  {form.class ? `${form.class} · ${form.medium} · ${form.board}` : "Batch select karo"}
+                </div>
+              </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <div><label style={s.label}>Subject 1</label><input style={s.input} placeholder="Physics / Science" value={form.subject1 || ""} onChange={e => setForm({ ...form, subject1: e.target.value })} /></div>
@@ -4285,14 +4405,45 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
             <div style={{ flex: 1, minWidth: 200 }}>
               <input style={s.input} placeholder="Search by name, email, class, RFID..." value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
             </div>
-            <select style={{ ...s.input, width: 160 }} value={studentFilter} onChange={e => setStudentFilter(e.target.value)}>
+            <select style={{ ...s.input, width: 180 }} value={studentFilter} onChange={e => setStudentFilter(e.target.value)}>
               <option value="all">All Students</option>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-              <option value="12th">Class 12</option>
-              <option value="11th">Class 11</option>
-              <option value="10th">Class 10</option>
-              <option value="9th">Class 9</option>
+              <option value="active">Active Status</option>
+              <option value="inactive">Inactive Status</option>
+              <optgroup label="Class 12th">
+                {BATCH_OPTIONS.filter(b => b.class === "12th").map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Class 11th">
+                {BATCH_OPTIONS.filter(b => b.class === "11th").map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Class 10th">
+                {BATCH_OPTIONS.filter(b => b.class === "10th").map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Class 9th">
+                {BATCH_OPTIONS.filter(b => b.class === "9th").map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Junior Classes">
+                {BATCH_OPTIONS.filter(b => b.class === "2nd-8th").map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Entrance Coaching">
+                {BATCH_OPTIONS.filter(b => ["Navodaya", "Prayas"].includes(b.class)).map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Other Batches">
+                {BATCH_OPTIONS.filter(b => !["12th", "11th", "10th", "9th", "2nd-8th", "Navodaya", "Prayas"].includes(b.class)).map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </optgroup>
             </select>
           </div>}
 
@@ -4300,8 +4451,11 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
           {!showForm && (() => {
             let list = students;
             if (studentFilter !== "all") {
-              if (studentFilter === "active" || studentFilter === "inactive") list = list.filter(x => x.status === studentFilter);
-              else list = list.filter(x => x.class?.includes(studentFilter.replace("th", "")));
+              if (studentFilter === "active" || studentFilter === "inactive") {
+                list = list.filter(x => x.status === studentFilter);
+              } else {
+                list = filterByBatch(list, studentFilter);
+              }
             }
             if (studentSearch.trim()) {
               const q = studentSearch.toLowerCase();
@@ -5567,7 +5721,7 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                         <td style={{ padding: "8px 6px", textAlign: "center" }}><span style={s.badge("#7C3AED", "#FAF5FF")}>{t.subject}</span></td>
                         <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.qualification || "—"}</td>
                         <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.experience || "—"}</td>
-                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.classes || "—"}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{getTeacherClassesDisplay(t, classBatches, courses)}</td>
                         <td style={{ padding: "8px 6px", textAlign: "center", fontFamily: "monospace", fontSize: ".68rem", color: t.rfidCode ? "#7C3AED" : "#B0C4DC" }}>{t.rfidCode || "—"}</td>
                         <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".68rem", color: "#6B7F99" }}>{t.cardValidFrom && t.cardValidTo ? `${t.cardValidFrom} → ${t.cardValidTo}` : "—"}</td>
                         <td style={{ padding: "8px 6px", textAlign: "center", fontSize: ".72rem", color: "#4A5E78" }}>{t.phone || "—"}</td>
