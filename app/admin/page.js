@@ -6031,18 +6031,19 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                       else if (!pm && h24 === 12) h24 = 0;
                       setNotifForm({ ...notifForm, time: `${String(h24).padStart(2, "0")}:${mn}` });
                     };
+                    const tSel = { border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "9px 8px", fontSize: ".88rem", outline: "none", fontFamily: "'DM Sans',sans-serif", cursor: "pointer", background: "#fff", marginBottom: 0 };
                     return (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curH}
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <select style={{ ...tSel, width: 64 }} value={curH}
                           onChange={e => applyTime(e.target.value, curMm, isPM)}>
-                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{v}</option>)}
+                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{String(v).padStart(2,"0")}</option>)}
                         </select>
-                        <span style={{ color: "#64748b", fontWeight: 700 }}>:</span>
-                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curMm}
+                        <span style={{ color: "#64748b", fontWeight: 800, fontSize: "1.1rem" }}>:</span>
+                        <select style={{ ...tSel, width: 64 }} value={curMm}
                           onChange={e => applyTime(curH, e.target.value, isPM)}>
                           {["00","05","10","15","20","25","30","35","40","45","50","55"].map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
-                        <select style={{ ...s.input, padding: "7px 8px" }} value={isPM ? "PM" : "AM"}
+                        <select style={{ ...tSel, width: 76 }} value={isPM ? "PM" : "AM"}
                           onChange={e => applyTime(curH, curMm, e.target.value === "PM")}>
                           <option value="AM">AM</option>
                           <option value="PM">PM</option>
@@ -6239,18 +6240,19 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                         else if (!pm && h24 === 12) h24 = 0;
                         setNotifForm({ ...notifForm, time: `${String(h24).padStart(2, "0")}:${mn}` });
                       };
+                      const tSel = { border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "9px 8px", fontSize: ".88rem", outline: "none", fontFamily: "'DM Sans',sans-serif", cursor: "pointer", background: "#fff", marginBottom: 0 };
                       return (
-                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                          <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curH}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <select style={{ ...tSel, width: 64 }} value={curH}
                             onChange={e => applyTime(e.target.value, curMm, isPM)}>
-                            {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{v}</option>)}
+                            {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{String(v).padStart(2,"0")}</option>)}
                           </select>
-                          <span style={{ color: "#64748b", fontWeight: 700 }}>:</span>
-                          <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curMm}
+                          <span style={{ color: "#64748b", fontWeight: 800, fontSize: "1.1rem" }}>:</span>
+                          <select style={{ ...tSel, width: 64 }} value={curMm}
                             onChange={e => applyTime(curH, e.target.value, isPM)}>
                             {["00","05","10","15","20","25","30","35","40","45","50","55"].map(v => <option key={v} value={v}>{v}</option>)}
                           </select>
-                          <select style={{ ...s.input, padding: "7px 8px" }} value={isPM ? "PM" : "AM"}
+                          <select style={{ ...tSel, width: 76 }} value={isPM ? "PM" : "AM"}
                             onChange={e => applyTime(curH, curMm, e.target.value === "PM")}>
                             <option value="AM">AM</option>
                             <option value="PM">PM</option>
@@ -7187,18 +7189,19 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                       else if (!pm && h24 === 12) h24 = 0;
                       setOtForm({ ...otForm, scheduledTime: `${String(h24).padStart(2, "0")}:${mn}` });
                     };
+                    const tSel = { border: "1.5px solid #C0D0E8", borderRadius: 8, padding: "9px 8px", fontSize: ".88rem", outline: "none", fontFamily: "'DM Sans',sans-serif", cursor: "pointer", background: "#fff", marginBottom: 0 };
                     return (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curH}
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <select style={{ ...tSel, width: 64 }} value={curH}
                           onChange={e => applyTime(e.target.value, curMm, isPM)}>
-                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{v}</option>)}
+                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{String(v).padStart(2,"0")}</option>)}
                         </select>
-                        <span style={{ color: "#64748b", fontWeight: 700 }}>:</span>
-                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curMm}
+                        <span style={{ color: "#64748b", fontWeight: 800, fontSize: "1.1rem" }}>:</span>
+                        <select style={{ ...tSel, width: 64 }} value={curMm}
                           onChange={e => applyTime(curH, e.target.value, isPM)}>
                           {["00","05","10","15","20","25","30","35","40","45","50","55"].map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
-                        <select style={{ ...s.input, padding: "7px 8px" }} value={isPM ? "PM" : "AM"}
+                        <select style={{ ...tSel, width: 76 }} value={isPM ? "PM" : "AM"}
                           onChange={e => applyTime(curH, curMm, e.target.value === "PM")}>
                           <option value="AM">AM</option>
                           <option value="PM">PM</option>
