@@ -53,11 +53,17 @@ export async function GET(req) {
       let tokenData = { expo: [], native: [] };
       try {
         try {
-          tokenData = await getTargetTokens(db, n);
+          // Teacher notifications → getTargetTokens (teachers + optional class)
+          // Scheduled student notifications → getTargetRecipients (students/parents only)
+          if (item.type === "teacher") {
+            tokenData = await getTargetTokens(db, n);
+          } else {
+            tokenData = await getTokensForScheduled(db, n);
+          }
         } catch (e) {
-        results.errors.push({ id: n.id, error: "Token fetch failed: " + e.message });
-        continue;
-      }
+          results.errors.push({ id: n.id, error: "Token fetch failed: " + e.message });
+          continue;
+        }
 
       if (tokenData.expo.length === 0 && tokenData.native.length === 0) {
         await docSnap.ref.update({ sent: true, sentAt: new Date().toISOString(), sentCount: 0 });
@@ -72,20 +78,22 @@ export async function GET(req) {
       if (tokenData.native.length > 0) {
         try {
           const fcmMessages = tokenData.native.map(token => ({
-            token: token,
+            token,
             notification: { title, body },
             android: {
               priority: "high",
-              notification: { channelId: "pid_alerts_v2", sound: "default" }
+              notification: {
+                channelId: "pid_alerts_v2",
+                sound: "default",
+                notificationPriority: "PRIORITY_MAX",
+                visibility: "PUBLIC",
+                defaultSound: true,
+                defaultVibrateTimings: true,
+              }
             },
-            data: { 
-              type: n.notifType || n.type || "general", 
-              notifId: n.id,
-              click_action: "FLUTTER_NOTIFICATION_CLICK" // for some legacy android handlers
-            }
+            data: { type: n.notifType || n.type || "general", notifId: n.id }
           }));
 
-          // Send in batches of 500 (Firebase limit)
           for (let i = 0; i < fcmMessages.length; i += 500) {
             await admin.messaging().sendEach(fcmMessages.slice(i, i + 500));
           }
@@ -104,8 +112,7 @@ export async function GET(req) {
             sound: "default",
             priority: "high",
             channelId: "pid_alerts_v2",
-            _contentAvailable: true,
-            data: { type: n.notifType || n.type || "general", notifId: n.id, displayMode: "popup" },
+            data: { type: n.notifType || n.type || "general", notifId: n.id },
           }));
 
           for (let i = 0; i < expoMessages.length; i += 100) {
@@ -183,8 +190,18 @@ export async function POST(req) {
           const fcmMessages = tokens.native.map(token => ({
             token,
             notification: { title, body },
-            android: { priority: "high", notification: { channelId: "pid_alerts_v2", sound: "default" } },
-            data: { type: n.notifType || n.type || "general", notifId: n.id, displayMode: "popup" }
+            android: {
+              priority: "high",
+              notification: {
+                channelId: "pid_alerts_v2",
+                sound: "default",
+                notificationPriority: "PRIORITY_MAX",
+                visibility: "PUBLIC",
+                defaultSound: true,
+                defaultVibrateTimings: true,
+              }
+            },
+            data: { type: n.notifType || n.type || "general", notifId: n.id }
           }));
           for (let i = 0; i < fcmMessages.length; i += 500) {
             await admin.messaging().sendEach(fcmMessages.slice(i, i + 500));
@@ -358,6 +375,18 @@ function matchesBatch(student, batchValue) {
   const nb = student.board === "CG Board" ? "CG" : student.board;
   if (batch.boards?.length && !batch.boards.includes(nb)) return false;
   return true;
+}
+
+// Adapter: converts getTargetRecipients output to flat {native, expo} for the cron handler
+async function getTokensForScheduled(db, n) {
+  const isFeePersonalized = n.isFeePersonalized || false;
+  const recipients = await getTargetRecipients(db, n, isFeePersonalized);
+  const native = [], expo = [];
+  recipients.forEach(r => {
+    if (r.tokens.native) native.push(...r.tokens.native);
+    if (r.tokens.expo) expo.push(...r.tokens.expo);
+  });
+  return { native: [...new Set(native)], expo: [...new Set(expo)] };
 }
 
 async function getTargetTokens(db, n) {

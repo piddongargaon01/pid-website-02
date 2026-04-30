@@ -2009,17 +2009,34 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
   // ═══════════════════════════════════════════
   // SCHEDULED NOTIFICATIONS CRUD
   // ═══════════════════════════════════════════
+  // Extract base class names from targetBatches for parent app notice filter
+  function extractForClass(targetBatches, fallbackTarget) {
+    if (targetBatches?.length > 0) {
+      const classes = [...new Set(
+        targetBatches.map(v => BATCH_OPTIONS.find(b => b.value === v)?.class).filter(Boolean)
+      )];
+      if (classes.length === 1) return classes[0];
+      if (classes.length > 1) return classes[0]; // best effort: first class
+    }
+    // For simple named targets, return as-is so the app filter can match
+    const t = fallbackTarget || "";
+    if (["all", "parents", "students"].includes(t)) return t;
+    return t; // may be a plain class like "10th"
+  }
+
   async function saveNotification() {
     if (!notifForm.date) { showMsg("Date is required!"); return; }
     if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
     if (!notifForm.targetBatches?.length && !notifForm.target) { showMsg("Please select at least one Target!"); return; }
-    
+
     setSaving(true);
     try {
       const data = { ...notifForm };
       if (notifForm.targetBatches?.length > 0) {
         data.target = notifForm.targetBatches.join(",");
       }
+      // Save forClass so the parent app notice section can filter by class name
+      data.forClass = extractForClass(notifForm.targetBatches, data.target);
 
       Object.keys(data).forEach(key => { if (data[key] === undefined) delete data[key]; });
       if (notifForm.editId) {
@@ -2054,52 +2071,67 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     if (!notifForm.message?.trim()) { showMsg("Message is required!"); return; }
     if (!notifForm.targetBatches?.length && !notifForm.target) { showMsg("Target is required!"); return; }
     setSaving(true);
+    let newDocRef = null;
     try {
-      const data = { 
-        ...notifForm, 
-        target: notifForm.targetBatches?.length > 0 ? notifForm.targetBatches.join(",") : notifForm.target,
-        date: new Date().toISOString().split("T")[0], 
+      const targetVal = notifForm.targetBatches?.length > 0 ? notifForm.targetBatches.join(",") : notifForm.target;
+      const data = {
+        ...notifForm,
+        target: targetVal,
+        forClass: extractForClass(notifForm.targetBatches, targetVal),
+        date: new Date().toISOString().split("T")[0],
         time: new Date().toLocaleTimeString("en-IN", { hour12: false, hour: "2-digit", minute: "2-digit" }),
         hideTime: true
       };
-      const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
+      newDocRef = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
       const res = await fetch("/api/send-scheduled-notifications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notifId: newDoc.id, secret: "pid_cron_2026" }),
+        body: JSON.stringify({ notifId: newDocRef.id, secret: "pid_cron_2026" }),
       });
       const result = await res.json();
-      if (result.success) { showMsg(`Success! Sent to ${result.sentCount} recipients.`); setShowNotifForm(false); setNotifForm({}); }
-      else { showMsg("Error: " + result.error); }
-    } catch (e) { showMsg("System Error: " + e.message); }
+      if (result.success) {
+        showMsg(`Success! Sent to ${result.sentCount} recipients.`);
+        setShowNotifForm(false); setNotifForm({});
+      } else {
+        // Delete the orphaned unsent doc to prevent cron from picking it up later
+        if (newDocRef) await deleteDoc(newDocRef);
+        showMsg("Error: " + result.error);
+      }
+    } catch (e) {
+      if (newDocRef) { try { await deleteDoc(newDocRef); } catch (_) {} }
+      showMsg("System Error: " + e.message);
+    }
     setSaving(false);
   }
 
   async function testNotificationPopup() {
     setSaving(true);
+    let testRef = null;
     try {
       const payload = {
         message: "🚨 Test Alert: Notification system working properly!",
         notifType: "urgent",
         target: "all",
+        forClass: "all",
         date: new Date().toISOString().split("T")[0]
       };
-      
-      const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...payload, sent: false, createdAt: serverTimestamp() });
-      
+      testRef = await addDoc(collection(db, "scheduled_notifications"), { ...payload, sent: false, createdAt: serverTimestamp() });
       const res = await fetch("/api/send-scheduled-notifications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notifId: newDoc.id, secret: "pid_cron_2026" }),
+        body: JSON.stringify({ notifId: testRef.id, secret: "pid_cron_2026" }),
       });
-      
       const result = await res.json();
       if (result.success) {
         showMsg("Test sent! Check for popup on Android 🔔");
       } else {
+        if (testRef) await deleteDoc(testRef);
         showMsg("Test Failed: " + result.error);
       }
-    } catch (e) { showMsg("Err: " + e.message); }
+    } catch (e) {
+      if (testRef) { try { await deleteDoc(testRef); } catch (_) {} }
+      showMsg("Err: " + e.message);
+    }
     setSaving(false);
   }
 

@@ -102,7 +102,7 @@ export async function GET(request) {
           nativeFcmMessages.push({
             token,
             notification: { title, body },
-            android: { priority: "high", notification: { channelId: "pid_alerts_v2", sound: "default" } },
+            android: { priority: "high", notification: { channelId: "pid_alerts_v2", sound: "default", notificationPriority: "PRIORITY_MAX", visibility: "PUBLIC", defaultSound: true, defaultVibrateTimings: true } },
             data,
           });
         } else {
