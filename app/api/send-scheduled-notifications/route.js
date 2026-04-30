@@ -76,7 +76,7 @@ export async function GET(req) {
             notification: { title, body },
             android: {
               priority: "high",
-              notification: { channelId: "pid_alerts", sound: "default" }
+              notification: { channelId: "pid_alerts_v2", sound: "default" }
             },
             data: { 
               type: n.notifType || n.type || "general", 
@@ -103,7 +103,7 @@ export async function GET(req) {
             title, body,
             sound: "default",
             priority: "high",
-            channelId: "pid_alerts",
+            channelId: "pid_alerts_v2",
             _contentAvailable: true,
             data: { type: n.notifType || n.type || "general", notifId: n.id, displayMode: "popup" },
           }));
@@ -158,7 +158,7 @@ export async function POST(req) {
     if (!docSnap.exists) return NextResponse.json({ error: "Notification not found" }, { status: 404 });
 
     const n = { id: docSnap.id, ...docSnap.data() };
-    const isFeePersonalized = n.isFeePersonalized || reqData.isFeePersonalized;
+    const isFeePersonalized = n.isFeePersonalized || false;
     
     // Get target recipients (with potential personalization)
     const targets = await getTargetRecipients(db, n, isFeePersonalized);
@@ -183,7 +183,7 @@ export async function POST(req) {
           const fcmMessages = tokens.native.map(token => ({
             token,
             notification: { title, body },
-            android: { priority: "high", notification: { channelId: "pid_alerts", sound: "default" } },
+            android: { priority: "high", notification: { channelId: "pid_alerts_v2", sound: "default" } },
             data: { type: n.notifType || n.type || "general", notifId: n.id, displayMode: "popup" }
           }));
           for (let i = 0; i < fcmMessages.length; i += 500) {
@@ -196,7 +196,7 @@ export async function POST(req) {
       if (tokens.expo.length > 0) {
         try {
           const expoMessages = tokens.expo.map(token => ({
-            to: token, title, body, sound: "default", priority: "high", channelId: "pid_alerts",
+            to: token, title, body, sound: "default", priority: "high", channelId: "pid_alerts_v2",
             _contentAvailable: true, data: { type: n.notifType || n.type || "general", notifId: n.id },
           }));
           for (let i = 0; i < expoMessages.length; i += 100) {
@@ -238,6 +238,7 @@ async function getTargetRecipients(db, n, isFeePersonalized) {
   };
 
   // Case 1: Specific Student (Result Notification)
+  const target = targets[0];
   if (target === "specific" && n.specificStudentId) {
     const doc = await db.collection("students").doc(n.specificStudentId).get();
     if (doc.exists) {

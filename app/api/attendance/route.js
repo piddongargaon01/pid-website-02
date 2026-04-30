@@ -119,7 +119,7 @@ export async function POST(request) {
           const fcmMessages = uniqueTokens.filter(t => !t.startsWith("ExponentPushToken")).map(token => ({
             token,
             notification: { title, body },
-            android: { priority: "high", notification: { channelId: "pid_alerts", sound: "default" } },
+            android: { priority: "high", notification: { channelId: "pid_alerts_v2", sound: "default" } },
             data: { type: "attendance", attendanceType: type, studentId: studentId || "unknown" }
           }));
 
@@ -131,7 +131,7 @@ export async function POST(request) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(expoTokens.map(to => ({
-                to, title, body, sound: "default", priority: "high", channelId: "pid_alerts",
+                to, title, body, sound: "default", priority: "high", channelId: "pid_alerts_v2",
                 data: { type: "attendance", attendanceType: type, studentId: studentId || "unknown" }
               })))
             });

@@ -102,12 +102,12 @@ export async function GET(request) {
           nativeFcmMessages.push({
             token,
             notification: { title, body },
-            android: { priority: "high", notification: { channelId: "pid_alerts", sound: "default" } },
+            android: { priority: "high", notification: { channelId: "pid_alerts_v2", sound: "default" } },
             data,
           });
         } else {
           expoPushMessages.push({
-            to: token, title, body, sound: "default", priority: "high", channelId: "pid_alerts", data,
+            to: token, title, body, sound: "default", priority: "high", channelId: "pid_alerts_v2", data,
           });
         }
       });
