@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/send-scheduled-notifications",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 13 * * *"
     },
     {
       "path": "/api/daily-absent-alert?secret=pid_cron_2026",
