@@ -77,11 +77,11 @@ export default function Home() {
 <nav id="nav" className={sd?"sd":""}>
 <div className="ni">
 <a href="#hero" className="nlogo"><img src="/pid_logo.png" alt="PID"/><div className="nlt"><strong>PID</strong><span>Patel Institute Dongargaon</span></div></a>
-<ul className="nlinks"><li><a href="#about">About</a></li><li><Link href="/courses">Courses</Link></li><li><Link href="/toppers">Results</Link></li><li><Link href="/student-portal">Student Portal</Link></li><li><Link href="/events">Events</Link></li><li><a href="#contact">Contact</a></li></ul>
+<ul className="nlinks"><li><a href="#about">About</a></li><li><Link href="/courses">Courses</Link></li><li><Link href="/toppers">Results</Link></li><li><Link href="/student-portal">Student Portal</Link></li><li><Link href="/events">Events</Link></li><li><Link href="/apps" style={{color:"#F5AC10",fontWeight:700}}>App</Link></li><li><a href="#contact">Contact</a></li></ul>
 <a href="#enquiry" className="btn bp bsm nenq">Enquire Now</a>
 <button className="hbg" onClick={()=>setMm(!mm)}><span/><span/><span/></button>
 </div>
-{mm&&<div className="mmenu op"><ul><li><a href="#about" onClick={()=>setMm(false)}>About</a></li><li><Link href="/courses" onClick={()=>setMm(false)}>Courses</Link></li><li><Link href="/toppers" onClick={()=>setMm(false)}>Results</Link></li><li><Link href="/student-portal" onClick={()=>setMm(false)}>Student Portal</Link></li><li><Link href="/events" onClick={()=>setMm(false)}>Events</Link></li><li><a href="#contact" onClick={()=>setMm(false)}>Contact</a></li></ul><a href="#enquiry" className="btn ba" onClick={()=>setMm(false)} style={{width:"100%",justifyContent:"center",marginTop:12}}>Enquire Now</a></div>}
+{mm&&<div className="mmenu op"><ul><li><a href="#about" onClick={()=>setMm(false)}>About</a></li><li><Link href="/courses" onClick={()=>setMm(false)}>Courses</Link></li><li><Link href="/toppers" onClick={()=>setMm(false)}>Results</Link></li><li><Link href="/student-portal" onClick={()=>setMm(false)}>Student Portal</Link></li><li><Link href="/events" onClick={()=>setMm(false)}>Events</Link></li><li><Link href="/apps" onClick={()=>setMm(false)} style={{color:"#F5AC10",fontWeight:700}}>App</Link></li><li><a href="#contact" onClick={()=>setMm(false)}>Contact</a></li></ul><a href="#enquiry" className="btn ba" onClick={()=>setMm(false)} style={{width:"100%",justifyContent:"center",marginTop:12}}>Enquire Now</a></div>}
 </nav>
 
 {/* HERO */}

@@ -12,7 +12,9 @@ export async function GET(req) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Use IST for time comparisons (UTC+5:30)
   const now = new Date();
+  const nowIST = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const results = { sent: [], skipped: [], errors: [] };
 
   try {
@@ -40,12 +42,13 @@ export async function GET(req) {
       const n = item.data;
       const docSnap = item.doc;
 
-      // For teacher notifications, they are usually sent immediately or by today's date
-      const dateStr = n.date || n.scheduledDate || n.createdAt?.toDate?.()?.toISOString()?.split("T")?.[0] || new Date().toISOString().split("T")[0];
+      const dateStr = n.date || n.scheduledDate || n.createdAt?.toDate?.()?.toISOString()?.split("T")?.[0]
+        || nowIST.toLocaleDateString("en-CA");
       const timeStr = n.time || n.scheduledTime || "00:00";
 
-      const scheduledAt = new Date(`${dateStr}T${timeStr}:00`);
-      if (now < scheduledAt) { results.skipped.push(n.id); continue; }
+      // Parse as IST time (admin enters time in IST, e.g. "19:00" means 7PM IST)
+      const scheduledAt = new Date(`${dateStr}T${timeStr}:00+05:30`);
+      if (nowIST < scheduledAt) { results.skipped.push(n.id); continue; }
 
       let tokenData = { expo: [], native: [] };
       try {

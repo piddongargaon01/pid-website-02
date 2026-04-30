@@ -71,31 +71,60 @@ export async function POST(request) {
       const parentTokens = [];
       if (studentData.parentNativeFcmToken) parentTokens.push(studentData.parentNativeFcmToken);
       if (studentData.parentNativeToken) parentTokens.push(studentData.parentNativeToken);
-      if (studentData.parentPushToken) parentTokens.push(studentData.parentPushToken); // expo token fallback
+      if (studentData.parentPushToken) parentTokens.push(studentData.parentPushToken);
 
-      if (parentTokens.length > 0) {
-        try {
-          const time = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
-          const studentName = record.studentName || "Bachcha";
-          const title = type === "in" ? "🎒 School/Library Pahuncha" : "🏠 Ghar Ke Liye Nikala";
-          const body = type === "in" 
-            ? `${studentName} aaj ${time} ko coaching pahuncha/aya.` 
-            : `${studentName} aaj ${time} ko coaching se nikala.`;
+      try {
+        // IST time
+        const istTime = new Date().toLocaleTimeString("en-IN", {
+          hour: "2-digit", minute: "2-digit", hour12: true,
+          timeZone: "Asia/Kolkata"
+        });
+        const istDate = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
 
+        const studentName = record.studentName || "Bachcha";
+        const genderRaw = (studentData.gender || "").toLowerCase().trim();
+        const isFemale = ["female", "girl", "f", "ladki"].includes(genderRaw);
+
+        // Gender-aware terms
+        const apka    = isFemale ? "Aapki" : "Aapka";
+        const bacha   = isFemale ? "bachi" : "bachcha";
+        const actionIn  = isFemale ? "aayi" : "aaya";
+        const actionOut = isFemale ? "nikli" : "nikla";
+
+        const title = type === "in"
+          ? `🎒 ${studentName} Coaching Pahunch${isFemale ? "i" : "a"}`
+          : `🏠 ${studentName} Coaching Se Nikal${isFemale ? "i" : "a"}`;
+        const body = type === "in"
+          ? `${apka} ${bacha} ${studentName} aaj ${istTime} baje coaching ${actionIn}.`
+          : `${apka} ${bacha} ${studentName} aaj ${istTime} baje coaching se ${actionOut}.`;
+
+        // ── Save to scheduled_notifications for parent app history ──
+        await db.collection("scheduled_notifications").add({
+          title,
+          message: body,
+          notifType: "attendance",
+          attendanceType: type,
+          date: istDate,
+          time: istTime,
+          studentId: studentId,
+          studentName: studentName,
+          target: "parents",
+          sent: true,
+          isAutomatic: true,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        if (parentTokens.length > 0) {
           const uniqueTokens = [...new Set(parentTokens)];
           const fcmMessages = uniqueTokens.filter(t => !t.startsWith("ExponentPushToken")).map(token => ({
             token,
             notification: { title, body },
             android: { priority: "high", notification: { channelId: "pid_alerts", sound: "default" } },
-            data: { type: "attendance", studentId: studentId || "unknown" }
+            data: { type: "attendance", attendanceType: type, studentId: studentId || "unknown" }
           }));
 
-          // Send Native FCM
-          if (fcmMessages.length > 0) {
-            await admin.messaging().sendEach(fcmMessages);
-          }
+          if (fcmMessages.length > 0) await admin.messaging().sendEach(fcmMessages);
 
-          // Fallback for Expo tokens
           const expoTokens = uniqueTokens.filter(t => t.startsWith("ExponentPushToken"));
           if (expoTokens.length > 0) {
             await fetch("https://exp.host/--/api/v2/push/send", {
@@ -103,13 +132,13 @@ export async function POST(request) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(expoTokens.map(to => ({
                 to, title, body, sound: "default", priority: "high", channelId: "pid_alerts",
-                data: { type: "attendance", studentId: studentId || "unknown" }
+                data: { type: "attendance", attendanceType: type, studentId: studentId || "unknown" }
               })))
             });
           }
-        } catch (pushErr) {
-          console.error("Attendance Push Error:", pushErr.message);
         }
+      } catch (pushErr) {
+        console.error("Attendance Push Error:", pushErr.message);
       }
     }
 

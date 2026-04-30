@@ -2,17 +2,18 @@ import { admin, adminDb } from "../../../lib/firebase-admin";
 
 export async function GET(request) {
   try {
-    // Secret check
     const { searchParams } = new URL(request.url);
     const cronSecret = process.env.CRON_SECRET || "pid_cron_2026";
     if (searchParams.get("secret") !== cronSecret) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const today = new Date().toISOString().split("T")[0];
-    const dayOfWeek = new Date().getDay();
+    // Use IST date (UTC+5:30)
+    const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const today = istNow.toLocaleDateString("en-CA"); // YYYY-MM-DD in IST
+    const dayOfWeek = istNow.getDay();
 
-    // Sunday skip
+    // Skip Sunday
     if (dayOfWeek === 0) {
       return Response.json({ message: "Sunday — skipping absence check" });
     }
@@ -26,19 +27,27 @@ export async function GET(request) {
       .where("status", "==", "active")
       .get();
 
-    // 2. Get today's 'in' attendance
+    // 2. Get today's 'in' attendance (IST date)
     const attSnap = await adminDb.collection("attendance")
       .where("date", "==", today)
       .where("type", "==", "in")
       .get();
     const presentIds = new Set(attSnap.docs.map(d => d.data().studentId));
 
-    // 3. Get today's approved leave applications
+    // 3. Get today's approved leaves
     const leavesSnap = await adminDb.collection("leave_applications")
       .where("date", "==", today)
       .where("status", "==", "approved")
       .get();
     const onLeaveIds = new Set(leavesSnap.docs.map(d => d.data().studentId));
+
+    // 4. Check holidays for today
+    const holidaySnap = await adminDb.collection("holidays")
+      .where("date", "==", today)
+      .get();
+    if (!holidaySnap.empty) {
+      return Response.json({ message: "Holiday today — skipping absence check", date: today });
+    }
 
     const nativeFcmMessages = [];
     const expoPushMessages = [];
@@ -48,32 +57,40 @@ export async function GET(request) {
       const student = studentDoc.data();
       const studentId = studentDoc.id;
 
-      // Skip if present or on leave
       if (presentIds.has(studentId) || onLeaveIds.has(studentId)) continue;
 
       // Batch validity check
       if (student.batchStartDate && today < student.batchStartDate) continue;
       if (student.batchEndDate && today > student.batchEndDate) continue;
 
-      const studentName = student.studentName || "Bachcha";
-      const title = `⚠️ ${studentName} Absent!`;
-      const body = `Aaj ${studentName} coaching nahi aaya/aayi. Please confirm karein.`;
+      const studentName = student.studentName || "Aapka Bachcha";
+      const genderRaw = (student.gender || "").toLowerCase().trim();
+      const isFemale = ["female", "girl", "f", "ladki"].includes(genderRaw);
+
+      const actionWord = isFemale ? "nahi aayi" : "nahi aaya";
+      const apka = isFemale ? "Aapki" : "Aapka";
+      const bacha = isFemale ? "bachi" : "bachcha";
+
+      const title = `⚠️ ${studentName} Aaj Absent!`;
+      const body = `${apka} ${bacha} ${studentName} aaj coaching ${actionWord}. Please confirm karein.`;
       const data = { type: "absent", studentId, date: today };
 
-      // ─── Save to History (scheduled_notifications) ───
+      // Save to scheduled_notifications with studentId for parent app history
       await adminDb.collection("scheduled_notifications").add({
+        title,
         message: body,
-        title: title,
-        notifType: "urgent",
+        notifType: "absent",
         date: today,
         time: "19:00",
-        studentId: studentId, // For private filtering
+        studentId: studentId,
+        studentName: studentName,
         target: "parents",
         sent: true,
+        isAutomatic: true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // ─── Prepare Push ───
+      // Prepare push tokens
       const tokens = [];
       if (student.parentNativeFcmToken) tokens.push(student.parentNativeFcmToken);
       if (student.parentNativeToken) tokens.push(student.parentNativeToken);
@@ -97,14 +114,14 @@ export async function GET(request) {
       sentCount++;
     }
 
-    // ─── Batch Send Native FCM ───
+    // Batch send Native FCM
     if (nativeFcmMessages.length > 0) {
       for (let i = 0; i < nativeFcmMessages.length; i += 500) {
         await admin.messaging().sendEach(nativeFcmMessages.slice(i, i + 500));
       }
     }
 
-    // ─── Batch Send Expo ───
+    // Batch send Expo
     if (expoPushMessages.length > 0) {
       for (let i = 0; i < expoPushMessages.length; i += 100) {
         await fetch("https://exp.host/--/api/v2/push/send", {
@@ -115,7 +132,7 @@ export async function GET(request) {
       }
     }
 
-    return Response.json({ success: true, processed: sentCount, date: today });
+    return Response.json({ success: true, processed: sentCount, date: today, istTime: istNow.toTimeString() });
   } catch (e) {
     console.error("Daily Absent Error:", e.message);
     return Response.json({ error: e.message }, { status: 500 });

@@ -491,6 +491,10 @@ export default function AdminPanel() {
   const [matCourse, setMatCourse] = useState("");
   const [matSubject, setMatSubject] = useState("");
   const [matType, setMatType] = useState("all");
+  const [pidApps, setPidApps] = useState([]);
+  const [appForm, setAppForm] = useState({});
+  const [appEditId, setAppEditId] = useState(null);
+  const [showAppForm, setShowAppForm] = useState(false);
 
   // Attendance states
   const [attendance, setAttendance] = useState([]);
@@ -794,6 +798,12 @@ unsubs.push(onSnapshot(collection(db, "leave_requests"), s => {
   arr.sort((a, b) => (b.createdAt?.toDate?.() || 0) - (a.createdAt?.toDate?.() || 0));
   setTeacherLeaves(arr);
 }));
+    // ═══ PID APPS LISTENER ═══
+    unsubs.push(onSnapshot(collection(db, "pid_apps"), s => {
+      const arr = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (a.order || 99) - (b.order || 99));
+      setPidApps(arr);
+    }));
     return () => unsubs.forEach(u => u());
   }, [isAdmin]);
 
@@ -2400,6 +2410,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     { id: "settings", icon: "fa-cog", label: "Website Settings" },
     { id: "leave_alerts", icon: "fa-calendar-times", label: "Leave Alerts" },
     { id: "ranks", icon: "fa-medal", label: "Student Rankings" },
+    { id: "pid_apps", icon: "fa-mobile-alt", label: "PID Apps" },
   ];
 
   const pendingReviews = reviews.filter(r => !r.approved);
@@ -4338,9 +4349,10 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
 
             {/* ── STUDENT DETAILS ── */}
             <div style={{ ...s.sectionTitle, marginTop: 8 }}><i className="fas fa-user" style={{ color: "#059669" }} /> Student Details</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <div><label style={s.label}>Student Name *</label><input style={s.input} placeholder="Full name" value={form.studentName || ""} onChange={e => setForm({ ...form, studentName: e.target.value })} /></div>
               <div><label style={s.label}>Date of Birth</label><input style={s.input} type="date" value={form.dob || ""} onChange={e => setForm({ ...form, dob: e.target.value })} /></div>
+              <div><label style={s.label}>Gender</label><select style={s.input} value={form.gender || ""} onChange={e => setForm({ ...form, gender: e.target.value })}><option value="">Select</option><option value="male">Male (Ladka)</option><option value="female">Female (Ladki)</option></select></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div><label style={s.label}>Birth Place</label><input style={s.input} placeholder="City / Village" value={form.birthPlace || ""} onChange={e => setForm({ ...form, birthPlace: e.target.value })} /></div>
@@ -6005,7 +6017,40 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
               {/* ═══ DATE & TIME ═══ */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                 <div><label style={s.label}>Scheduled Date *</label><input style={s.input} type="date" value={notifForm.date || ""} onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} /></div>
-                <div><label style={s.label}>Scheduled Time</label><input style={s.input} type="time" value={notifForm.time || ""} onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} /></div>
+                <div><label style={s.label}>Scheduled Time (IST)</label>
+                  {(() => {
+                    const t24 = notifForm.time || "";
+                    const parts = t24.split(":");
+                    const rawH = parseInt(parts[0] || "0", 10);
+                    const curMm = parts[1] || "00";
+                    const isPM = rawH >= 12;
+                    const curH = rawH === 0 ? 12 : rawH > 12 ? rawH - 12 : rawH;
+                    const applyTime = (h12, mn, pm) => {
+                      let h24 = parseInt(h12, 10);
+                      if (pm && h24 !== 12) h24 += 12;
+                      else if (!pm && h24 === 12) h24 = 0;
+                      setNotifForm({ ...notifForm, time: `${String(h24).padStart(2, "0")}:${mn}` });
+                    };
+                    return (
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curH}
+                          onChange={e => applyTime(e.target.value, curMm, isPM)}>
+                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                        <span style={{ color: "#64748b", fontWeight: 700 }}>:</span>
+                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curMm}
+                          onChange={e => applyTime(curH, e.target.value, isPM)}>
+                          {["00","05","10","15","20","25","30","35","40","45","50","55"].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                        <select style={{ ...s.input, padding: "7px 8px" }} value={isPM ? "PM" : "AM"}
+                          onChange={e => applyTime(curH, curMm, e.target.value === "PM")}>
+                          <option value="AM">AM</option>
+                          <option value="PM">PM</option>
+                        </select>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
 
               {/* ═══ TEACHER NOTIFICATION SECTION ═══ */}
@@ -6118,31 +6163,46 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
             )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi holiday add nahi hua abhi tak. Calendar me click karo ya "Add Holiday" button use karo.</p>}
           </div>
 
-          {/* Student/Parent Notification List */}
+          {/* Student/Parent Notification List — auto messages excluded */}
           <div style={{ ...s.card }}>
-            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}>
+            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 4 }}>
               <i className="fas fa-bell" style={{ marginRight: 6, color: "#D98D04" }} />
-              Student/Parent Notifications ({notifications.length})
+              Student/Parent Notifications
             </h3>
-            {notifications.length > 0 ? notifications.map(n => (
-              <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #E8EFF8" }}>
-                <div style={{ width: 44, textAlign: "center" }}>
-                  <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#D98D04" }}>{new Date(n.date + "T00:00:00").getDate()}</div>
-                  <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>{new Date(n.date + "T00:00:00").toLocaleDateString("en-IN", { month: "short" })}</div>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: ".86rem" }}>{n.message}</div>
-                  <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>
-                    {n.notifType && <span style={s.badge("#7C3AED", "#FAF5FF")}>{n.notifType}</span>}
-                    {" "}{n.time || ""} · Target: {n.target || "all"}
+            <p style={{ fontSize: ".72rem", color: "#6B7F99", marginBottom: 12 }}>
+              Auto check-in/out aur absent messages yahan nahi dikhte (wo directly parent ke app me jaate hain)
+            </p>
+            {(() => {
+              const manualNotifs = notifications.filter(n => !n.isAutomatic);
+              return manualNotifs.length > 0 ? manualNotifs.map(n => {
+                const t24 = n.time || "";
+                const t12 = t24 ? (() => {
+                  const [hh, mm] = t24.split(":");
+                  const h = parseInt(hh, 10);
+                  return `${h > 12 ? h - 12 : h || 12}:${mm} ${h >= 12 ? "PM" : "AM"}`;
+                })() : "";
+                return (
+                  <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #E8EFF8" }}>
+                    <div style={{ width: 44, textAlign: "center" }}>
+                      <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#D98D04" }}>{n.date ? new Date(n.date + "T00:00:00").getDate() : "—"}</div>
+                      <div style={{ fontSize: ".62rem", color: "#6B7F99" }}>{n.date ? new Date(n.date + "T00:00:00").toLocaleDateString("en-IN", { month: "short" }) : ""}</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: ".86rem" }}>{n.message}</div>
+                      <div style={{ fontSize: ".72rem", color: "#6B7F99" }}>
+                        {n.notifType && <span style={s.badge("#7C3AED", "#FAF5FF")}>{n.notifType}</span>}
+                        {" "}{t12 || ""} · Target: {n.target || "all"}
+                        {n.sent && <span style={{ ...s.badge("#059669", "#ECFDF5"), marginLeft: 4 }}>✓ Sent</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => { setShowNotifForm(true); setNotifForm({ ...n, editId: n.id }); }} style={s.btnO}><i className="fas fa-edit" /></button>
+                      <button onClick={() => deleteNotification(n.id)} style={s.btnD}><i className="fas fa-trash" /></button>
+                    </div>
                   </div>
-                </div>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button onClick={() => { setShowNotifForm(true); setNotifForm({ ...n, editId: n.id }); }} style={s.btnO}><i className="fas fa-edit" /></button>
-                  <button onClick={() => deleteNotification(n.id)} style={s.btnD}><i className="fas fa-trash" /></button>
-                </div>
-              </div>
-            )) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi notification scheduled nahi hai.</p>}
+                );
+              }) : <p style={{ fontSize: ".84rem", color: "#6B7F99" }}>Koi manual notification scheduled nahi hai.</p>;
+            })()}
           </div>
 
           {/* ═══ TEACHER NOTIFICATIONS LIST ═══ */}
@@ -6165,9 +6225,39 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                       onChange={e => setNotifForm({ ...notifForm, date: e.target.value })} />
                   </div>
                   <div>
-                    <label style={s.label}>Time</label>
-                    <input style={s.input} type="time" value={notifForm.time || ""}
-                      onChange={e => setNotifForm({ ...notifForm, time: e.target.value })} />
+                    <label style={s.label}>Time (IST)</label>
+                    {(() => {
+                      const t24 = notifForm.time || "";
+                      const parts = t24.split(":");
+                      const rawH = parseInt(parts[0] || "0", 10);
+                      const curMm = parts[1] || "00";
+                      const isPM = rawH >= 12;
+                      const curH = rawH === 0 ? 12 : rawH > 12 ? rawH - 12 : rawH;
+                      const applyTime = (h12, mn, pm) => {
+                        let h24 = parseInt(h12, 10);
+                        if (pm && h24 !== 12) h24 += 12;
+                        else if (!pm && h24 === 12) h24 = 0;
+                        setNotifForm({ ...notifForm, time: `${String(h24).padStart(2, "0")}:${mn}` });
+                      };
+                      return (
+                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curH}
+                            onChange={e => applyTime(e.target.value, curMm, isPM)}>
+                            {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                          <span style={{ color: "#64748b", fontWeight: 700 }}>:</span>
+                          <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curMm}
+                            onChange={e => applyTime(curH, e.target.value, isPM)}>
+                            {["00","05","10","15","20","25","30","35","40","45","50","55"].map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                          <select style={{ ...s.input, padding: "7px 8px" }} value={isPM ? "PM" : "AM"}
+                            onChange={e => applyTime(curH, curMm, e.target.value === "PM")}>
+                            <option value="AM">AM</option>
+                            <option value="PM">PM</option>
+                          </select>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div style={{ marginBottom: 10 }}>
@@ -7083,7 +7173,40 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div><label style={s.label}>Schedule Date (optional)</label><input style={s.input} type="date" value={otForm.scheduledDate || ""} onChange={e => setOtForm({ ...otForm, scheduledDate: e.target.value })} /></div>
-                <div><label style={s.label}>Schedule Time (optional)</label><input style={s.input} type="time" value={otForm.scheduledTime || ""} onChange={e => setOtForm({ ...otForm, scheduledTime: e.target.value })} /></div>
+                <div><label style={s.label}>Schedule Time (optional, IST)</label>
+                  {(() => {
+                    const t24 = otForm.scheduledTime || "";
+                    const parts = t24.split(":");
+                    const rawH = parseInt(parts[0] || "0", 10);
+                    const curMm = parts[1] || "00";
+                    const isPM = rawH >= 12;
+                    const curH = rawH === 0 ? 12 : rawH > 12 ? rawH - 12 : rawH;
+                    const applyTime = (h12, mn, pm) => {
+                      let h24 = parseInt(h12, 10);
+                      if (pm && h24 !== 12) h24 += 12;
+                      else if (!pm && h24 === 12) h24 = 0;
+                      setOtForm({ ...otForm, scheduledTime: `${String(h24).padStart(2, "0")}:${mn}` });
+                    };
+                    return (
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curH}
+                          onChange={e => applyTime(e.target.value, curMm, isPM)}>
+                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                        <span style={{ color: "#64748b", fontWeight: 700 }}>:</span>
+                        <select style={{ ...s.input, padding: "7px 4px", flex: 1 }} value={curMm}
+                          onChange={e => applyTime(curH, e.target.value, isPM)}>
+                          {["00","05","10","15","20","25","30","35","40","45","50","55"].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                        <select style={{ ...s.input, padding: "7px 8px" }} value={isPM ? "PM" : "AM"}
+                          onChange={e => applyTime(curH, curMm, e.target.value === "PM")}>
+                          <option value="AM">AM</option>
+                          <option value="PM">PM</option>
+                        </select>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
               <div><label style={s.label}>Instructions (optional)</label><textarea style={{ ...s.input, height: 60, resize: "none" }} placeholder="e.g. Sabhi questions attempt karo. Negative marking nahi hai." value={otForm.instructions || ""} onChange={e => setOtForm({ ...otForm, instructions: e.target.value })} /></div>
               <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
@@ -8260,6 +8383,148 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
               </div>
             );
           })()}
+        </>}
+
+        {/* ═══════════ PID APPS TAB ═══════════ */}
+        {tab === "pid_apps" && <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+            <h2 style={{ fontSize: "1.3rem", fontWeight: 800 }}>📱 PID Apps</h2>
+            <button onClick={() => { setAppForm({ order: pidApps.length + 1 }); setAppEditId(null); setShowAppForm(true); }} style={s.btnP}>
+              <i className="fas fa-plus" style={{ marginRight: 6 }} />Add App
+            </button>
+          </div>
+
+          <div style={{ ...s.card, marginBottom: 16, background: "#F0F9FF", border: "1px solid #BAE6FD" }}>
+            <p style={{ fontSize: ".82rem", color: "#0369A1", margin: 0 }}>
+              <i className="fas fa-info-circle" style={{ marginRight: 6 }} />
+              Yahan jo apps add karoge, woh website ke <strong>/apps</strong> page par dikhengi jahan se students/parents APK direct download kar sakte hain.
+            </p>
+          </div>
+
+          {/* App Form */}
+          {showAppForm && (
+            <div style={{ ...s.card, marginBottom: 16 }}>
+              <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 14 }}>
+                {appEditId ? "✏️ Edit App" : "➕ New App"}
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={s.label}>App Name *</label>
+                  <input style={s.input} placeholder="e.g. PID Student App" value={appForm.name || ""} onChange={e => setAppForm({ ...appForm, name: e.target.value })} />
+                </div>
+                <div>
+                  <label style={s.label}>App Type</label>
+                  <select style={s.input} value={appForm.type || "student"} onChange={e => setAppForm({ ...appForm, type: e.target.value })}>
+                    <option value="student">Student App</option>
+                    <option value="parent">Parent App</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>Description</label>
+                <textarea style={{ ...s.input, height: 72, resize: "none" }} placeholder="App ke baare mein short description..." value={appForm.description || ""} onChange={e => setAppForm({ ...appForm, description: e.target.value })} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>App Logo / Icon</label>
+                <ImageUploader
+                  folder="pid_apps"
+                  label="App Logo"
+                  currentUrl={appForm.logo || ""}
+                  onUpload={(url) => setAppForm({ ...appForm, logo: url })}
+                  onRemove={() => setAppForm({ ...appForm, logo: "" })}
+                />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>Version</label>
+                <input style={s.input} placeholder="e.g. 1.0.0" value={appForm.version || ""} onChange={e => setAppForm({ ...appForm, version: e.target.value })} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>APK / Download Link *</label>
+                <input style={s.input} placeholder="Direct APK download link ya Play Store link" value={appForm.downloadUrl || ""} onChange={e => setAppForm({ ...appForm, downloadUrl: e.target.value })} />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={s.label}>File Size</label>
+                  <input style={s.input} placeholder="e.g. 45 MB" value={appForm.fileSize || ""} onChange={e => setAppForm({ ...appForm, fileSize: e.target.value })} />
+                </div>
+                <div>
+                  <label style={s.label}>Display Order</label>
+                  <input style={s.input} type="number" value={appForm.order || 1} onChange={e => setAppForm({ ...appForm, order: Number(e.target.value) })} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button onClick={async () => {
+                  if (!appForm.name?.trim()) { showMsg("App name required!"); return; }
+                  if (!appForm.downloadUrl?.trim()) { showMsg("Download link required!"); return; }
+                  setSaving(true);
+                  try {
+                    const data = { name: appForm.name, type: appForm.type || "student", description: appForm.description || "", logo: appForm.logo || "", version: appForm.version || "", downloadUrl: appForm.downloadUrl, fileSize: appForm.fileSize || "", order: appForm.order || 1, updatedAt: serverTimestamp() };
+                    if (appEditId) {
+                      await updateDoc(doc(db, "pid_apps", appEditId), data);
+                      showMsg("App updated!");
+                    } else {
+                      await addDoc(collection(db, "pid_apps"), { ...data, createdAt: serverTimestamp() });
+                      showMsg("App added!");
+                    }
+                    setShowAppForm(false); setAppForm({}); setAppEditId(null);
+                  } catch (e) { showMsg("Error: " + e.message); }
+                  setSaving(false);
+                }} style={s.btnP} disabled={saving}>
+                  <i className="fas fa-save" style={{ marginRight: 6 }} />{saving ? "Saving..." : appEditId ? "Update App" : "Add App"}
+                </button>
+                <button onClick={() => { setShowAppForm(false); setAppForm({}); setAppEditId(null); }} style={s.btnGray}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Apps List */}
+          {pidApps.length === 0 && !showAppForm ? (
+            <div style={{ ...s.card, textAlign: "center", padding: 48, color: "#6B7F99" }}>
+              <i className="fas fa-mobile-alt" style={{ fontSize: "2rem", marginBottom: 12, display: "block", color: "#BAC8D8" }} />
+              <p style={{ fontWeight: 600 }}>Koi app nahi hai. "Add App" button se add karo.</p>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 16 }}>
+              {pidApps.map(app => (
+                <div key={app.id} style={{ ...s.card, display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {app.logo ? (
+                      <img src={app.logo} alt={app.name} style={{ width: 56, height: 56, borderRadius: 14, objectFit: "cover", border: "1px solid #E8EFF8" }} />
+                    ) : (
+                      <div style={{ width: 56, height: 56, borderRadius: 14, background: app.type === "parent" ? "#FEF3C7" : "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <i className="fas fa-mobile-alt" style={{ fontSize: "1.4rem", color: app.type === "parent" ? "#D97706" : "#1349A8" }} />
+                      </div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: ".92rem" }}>{app.name}</div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: ".68rem", fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: app.type === "parent" ? "#FEF3C7" : "#EFF6FF", color: app.type === "parent" ? "#D97706" : "#1349A8" }}>
+                          {app.type === "parent" ? "Parent App" : app.type === "student" ? "Student App" : "App"}
+                        </span>
+                        {app.version && <span style={{ fontSize: ".68rem", color: "#6B7F99", padding: "2px 8px", borderRadius: 99, background: "#F1F5F9" }}>v{app.version}</span>}
+                        {app.fileSize && <span style={{ fontSize: ".68rem", color: "#6B7F99", padding: "2px 8px", borderRadius: 99, background: "#F1F5F9" }}>{app.fileSize}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  {app.description && <p style={{ fontSize: ".8rem", color: "#475569", margin: 0, lineHeight: 1.5 }}>{app.description}</p>}
+                  {app.downloadUrl && (
+                    <a href={app.downloadUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: ".78rem", color: "#1349A8", wordBreak: "break-all" }}>
+                      <i className="fas fa-link" style={{ marginRight: 4 }} />{app.downloadUrl}
+                    </a>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <button onClick={() => { setAppForm({ ...app }); setAppEditId(app.id); setShowAppForm(true); window.scrollTo({ top: 0, behavior: "smooth" }); }} style={{ ...s.btnG, flex: 1 }}>
+                      <i className="fas fa-edit" style={{ marginRight: 4 }} />Edit
+                    </button>
+                    <button onClick={async () => { if (!confirm("Delete this app?")) return; try { await deleteDoc(doc(db, "pid_apps", app.id)); showMsg("App deleted!"); } catch (e) { showMsg("Error!"); } }} style={{ ...s.btnD, flex: 1 }}>
+                      <i className="fas fa-trash" style={{ marginRight: 4 }} />Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>}
 
       </div>
