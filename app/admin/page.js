@@ -2124,6 +2124,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           scheduledDate: notifForm.date || "",
           scheduledTime: notifForm.time || "",
           forTeacher: notifForm.teacherTarget || "all",
+          forClass: notifForm.forClass || "all",
           updatedAt: serverTimestamp(),
         });
         showMsg("Teacher notification updated!");
@@ -6282,6 +6283,29 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                     ))}
                   </select>
                 </div>
+                <div style={{ marginBottom: 10 }}>
+                  <label style={s.label}>Students/Parents ko bhi bhejo (Class)</label>
+                  <select style={s.input} value={notifForm.forClass || "none"}
+                    onChange={e => setNotifForm({ ...notifForm, forClass: e.target.value })}>
+                    <option value="none">Sirf Teachers (No Students)</option>
+                    <option value="all">All Students + Parents</option>
+                    <option value="2nd">2nd</option>
+                    <option value="3rd">3rd</option>
+                    <option value="4th">4th</option>
+                    <option value="5th">5th</option>
+                    <option value="6th">6th</option>
+                    <option value="7th">7th</option>
+                    <option value="8th">8th</option>
+                    <option value="9th">9th</option>
+                    <option value="10th">10th</option>
+                    <option value="11th">11th</option>
+                    <option value="12th">12th</option>
+                    <option value="2nd-8th-All">2nd–8th All</option>
+                    <option value="JEE-NEET">9th–12th (JEE/NEET)</option>
+                    <option value="Navodaya">Navodaya</option>
+                    <option value="Prayas">Prayas</option>
+                  </select>
+                </div>
                 <div style={{ marginBottom: 12 }}>
                   <label style={s.label}>Message *</label>
                   <textarea style={{ ...s.input, height: 70, resize: "none" }}
@@ -6328,6 +6352,7 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
                       date: n.scheduledDate || "",
                       time: n.scheduledTime || "",
                       teacherTarget: n.forTeacher || "all",
+                      forClass: n.forClass || "none",
                     })} style={s.btnO}><i className="fas fa-edit" /></button>
                     <button onClick={() => deleteTeacherNotification(n.id)} style={s.btnD}><i className="fas fa-trash" /></button>
                   </div>

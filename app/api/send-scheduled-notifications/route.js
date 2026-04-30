@@ -310,6 +310,9 @@ async function getTargetRecipients(db, n, isFeePersonalized) {
 }
 
 function matchesBatch(student, batchValue) {
+  // 0. Simple class name match (e.g. "10th", "9th")
+  if (student.class === batchValue || student.presentClass === batchValue) return true;
+
   // 1. Special hardcoded batches
   const specialMap = {
     "2nd-8th-All": ["2nd","3rd","4th","5th","6th","7th","8th"],
@@ -348,13 +351,67 @@ function matchesBatch(student, batchValue) {
     "9th-Hindi-CG-CBSE":  { class: "9th",  medium: "Hindi",   boards: ["CG","CBSE"] },
   };
   const batch = classMap[batchValue];
-  if (!batch) return true;
+  if (!batch) return false;
 
   if (student.class !== batch.class) return false;
   if (batch.medium && student.medium !== batch.medium) return false;
   const nb = student.board === "CG Board" ? "CG" : student.board;
   if (batch.boards?.length && !batch.boards.includes(nb)) return false;
   return true;
+}
+
+async function getTargetTokens(db, n) {
+  const native = [], expo = [];
+  const addStudentTokens = (data) => {
+    if (data.parentNativeFcmToken) native.push(data.parentNativeFcmToken);
+    if (data.parentNativeToken) native.push(data.parentNativeToken);
+    if (data.parentPushToken) expo.push(data.parentPushToken);
+    if (data.nativeFcmToken) native.push(data.nativeFcmToken);
+    if (data.expoPushToken) expo.push(data.expoPushToken);
+  };
+  const addTeacherTokens = (data) => {
+    if (data.nativeFcmToken) native.push(data.nativeFcmToken);
+    if (data.expoPushToken) expo.push(data.expoPushToken);
+  };
+
+  // Teacher notifications from `notifications` collection have forTeacher + forClass
+  // forClass may come from admin panel or from teacher app's own field
+  const forTeacher = n.forTeacher || "all";
+  const rawTarget = n.target || "";
+  // Use forClass if set; fall back to target only if it's a class value (not teacher targets)
+  const teacherOnlyTargets = ["teachers_all", "all", "students", "parents", ""];
+  const forClass = n.forClass
+    || (!teacherOnlyTargets.includes(rawTarget) ? rawTarget : "none")
+    || "none";
+
+  // Always send to teacher(s) first
+  if (forTeacher === "all" || !forTeacher || forTeacher === "teachers_all") {
+    const snap = await db.collection("teachers").get();
+    snap.docs.forEach(d => addTeacherTokens(d.data()));
+  } else {
+    // Specific teacher by email or id
+    const byEmail = await db.collection("teachers").where("email", "==", forTeacher).limit(1).get();
+    if (!byEmail.empty) { addTeacherTokens(byEmail.docs[0].data()); }
+    else {
+      const byId = await db.collection("teachers").doc(forTeacher).get();
+      if (byId.exists) addTeacherTokens(byId.data());
+    }
+  }
+
+  // Send to students+parents if forClass is set (not "none")
+  if (forClass && forClass !== "none") {
+    const targets = (typeof forClass === "string" && forClass.includes(","))
+      ? forClass.split(",").map(t => t.trim())
+      : [forClass];
+    const snap = await db.collection("students").where("status", "==", "active").get();
+    const isAll = targets.some(t => ["all", "students", "parents"].includes(t));
+    snap.docs.forEach(d => {
+      const st = d.data();
+      if (isAll || targets.some(t => matchesBatch(st, t))) addStudentTokens(st);
+    });
+  }
+
+  return { native: [...new Set(native)], expo: [...new Set(expo)] };
 }
 
 function getTitleByType(type) {
