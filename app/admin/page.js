@@ -2051,12 +2051,13 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
         showMsg("Notification updated!");
       } else {
         if (data.target === "teachers_all") {
-          await addDoc(collection(db, "notifications"), { message: data.message, type: data.notifType || "general", scheduledDate: data.date, scheduledTime: data.time || "", forTeacher: "all", targetType: "teacher", sentBy: "Admin", sent: false, createdAt: serverTimestamp() });
+          await addDoc(collection(db, "notifications"), { message: data.message, type: data.notifType || "general", scheduledDate: data.date, scheduledTime: data.time || "", forTeacher: "all", forClass: "teachers", targetType: "teacher", sentBy: "Admin", sent: false, createdAt: serverTimestamp() });
           showMsg("Notification sabhi Teachers ko bhej diya!");
         } else {
           const newDoc = await addDoc(collection(db, "scheduled_notifications"), { ...data, sent: false, createdAt: serverTimestamp() });
           if (data.sendToTeachers) {
-            const tNotif = await addDoc(collection(db, "notifications"), { message: data.message, type: data.notifType || "general", scheduledDate: data.date, scheduledTime: data.time || "", forTeacher: data.teacherTarget || "all", targetType: "teacher", sentBy: "Admin", sent: false, createdAt: serverTimestamp() });
+            // forClass:"teachers" prevents student app from showing this as a duplicate
+            const tNotif = await addDoc(collection(db, "notifications"), { message: data.message, type: data.notifType || "general", scheduledDate: data.date, scheduledTime: data.time || "", forTeacher: data.teacherTarget || "all", forClass: "teachers", targetType: "teacher", sentBy: "Admin", sent: false, createdAt: serverTimestamp() });
             await updateDoc(doc(db, "scheduled_notifications", newDoc.id), { teacherNotifDocId: tNotif.id });
           }
           showMsg("Notification scheduled successfully!");
@@ -2145,6 +2146,24 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
     try { await deleteDoc(doc(db, "notifications", id)); showMsg("Teacher notification deleted!"); } catch (e) { showMsg("Error!"); }
   }
 
+  async function fixOldTeacherNotifications() {
+    if (!confirm("Purane teacher notifications me 'forClass: teachers' set karo? (Student app se duplicate hatega)")) return;
+    setSaving(true);
+    try {
+      const snap = await getDocs(collection(db, "notifications"));
+      let count = 0;
+      for (const d of snap.docs) {
+        const data = d.data();
+        if (!data.forClass) {
+          await updateDoc(doc(db, "notifications", d.id), { forClass: "teachers" });
+          count++;
+        }
+      }
+      showMsg(`Done! ${count} purane notifications fix ho gaye.`);
+    } catch (e) { showMsg("Error: " + e.message); }
+    setSaving(false);
+  }
+
   async function saveTeacherNotification() {
     if (!notifForm.message?.trim()) { showMsg("Message required hai!"); return; }
     setSaving(true);
@@ -2156,7 +2175,7 @@ Example: [{"question":"...","options":["A","B","C","D"],"correctAnswer":0,"expla
           scheduledDate: notifForm.date || "",
           scheduledTime: notifForm.time || "",
           forTeacher: notifForm.teacherTarget || "all",
-          forClass: notifForm.forClass || "all",
+          forClass: (notifForm.forClass && notifForm.forClass !== "none") ? notifForm.forClass : "teachers",
           updatedAt: serverTimestamp(),
         });
         showMsg("Teacher notification updated!");
@@ -6241,10 +6260,15 @@ const teachersOnLeaveToday = teacherLeaves.filter(lv => {
 
           {/* ═══ TEACHER NOTIFICATIONS LIST ═══ */}
           <div style={{ ...s.card, border: "1px solid #E9D5FF" }}>
-            <h3 style={{ fontSize: ".95rem", fontWeight: 700, marginBottom: 12 }}>
-              <i className="fas fa-chalkboard-teacher" style={{ marginRight: 6, color: "#7C3AED" }} />
-              Teacher Notifications ({teacherNotifications.length})
-            </h3>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h3 style={{ fontSize: ".95rem", fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-chalkboard-teacher" style={{ marginRight: 6, color: "#7C3AED" }} />
+                Teacher Notifications ({teacherNotifications.length})
+              </h3>
+              <button onClick={fixOldTeacherNotifications} disabled={saving} style={{ ...s.btnGray, fontSize: ".7rem", padding: "4px 10px" }} title="Purane notifications fix karo">
+                <i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix Old
+              </button>
+            </div>
 
             {/* Edit Form — inline */}
             {notifForm.editTeacherId && (
